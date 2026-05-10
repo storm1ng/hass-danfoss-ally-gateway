@@ -1,0 +1,39 @@
+{
+    "config": {
+        "step": {
+            "user": {
+                "title": "Danfoss Ally Gateway",
+                "description": "Select the Zigbee backend used to communicate with your Danfoss Ally TRVs.",
+                "data": {
+                    "backend": "Zigbee backend"
+                }
+            },
+            "z2m": {
+                "title": "Zigbee2MQTT Configuration",
+                "description": "Configure the Zigbee2MQTT MQTT base topic. The default is usually correct unless you changed it in Z2M settings.",
+                "data": {
+                    "mqtt_base_topic": "MQTT base topic"
+                }
+            },
+            "zha": {
+                "title": "ZHA Configuration",
+                "description": "ZHA will be used to communicate with your Danfoss Ally TRVs via Zigbee cluster commands."
+            },
+            "reconfigure": {
+                "title": "Reconfigure Danfoss Ally Gateway",
+                "description": "Update the integration settings.",
+                "data": {
+                    "mqtt_base_topic": "MQTT base topic"
+                }
+            }
+        },
+        "error": {
+            "invalid_backend": "Invalid backend selected.",
+            "cannot_connect": "Failed to connect to the selected backend."
+        },
+        "abort": {
+            "already_configured": "[%key:common::config_flow::abort::already_configured_service%]",
+            "zha_no_options": "ZHA backend has no configurable options."
+        }
+    }
+}
