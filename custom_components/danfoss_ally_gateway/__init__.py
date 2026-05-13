@@ -11,19 +11,21 @@ import logging
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
-from .const import DOMAIN
+from custom_components.danfoss_ally_gateway.backend import DanfossBackend
+from custom_components.danfoss_ally_gateway.backend.z2m import Z2MBackend
+
+from .const import BACKEND_Z2M, CONF_BACKEND, CONF_MQTT_BASE_TOPIC, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Set up Danfoss Ally Gateway from a config entry."""
-    _LOGGER.info("Setting up Danfoss Ally Gateway: %s", entry.title)
-
-    hass.data.setdefault(DOMAIN, {})
-    hass.data[DOMAIN][entry.entry_id] = {}
-
-    return True
+def _create_backend(hass: HomeAssistant, entry: ConfigEntry) -> DanfossBackend:
+    """Create the appropriate backend based on config entry data."""
+    backend_type = entry.data[CONF_BACKEND]
+    if backend_type == BACKEND_Z2M:
+        base_topic = entry.data.get(CONF_MQTT_BASE_TOPIC, "zigbee2mqtt")
+        return Z2MBackend(hass, base_topic)
+    raise ValueError(f"Unknown backend type: {backend_type}")
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

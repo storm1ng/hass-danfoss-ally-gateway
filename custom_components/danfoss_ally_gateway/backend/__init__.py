@@ -14,7 +14,7 @@ class TRVState:
 
     entity_id: str
     local_temperature: float | None = None
-    occupied_heat_setpoint: float | None = None
+    occupied_heating_setpoint: float | None = None
     pi_heating_demand: int | None = None
     load_estimate: int | None = None
     load_balancing_enable: bool | None = None
