@@ -12,7 +12,10 @@ from custom_components.danfoss_ally_gateway.const import (
     BACKEND_Z2M,
     CONF_BACKEND,
     CONF_MQTT_BASE_TOPIC,
+    CONF_ROOM_NAME,
+    CONF_TRV_ENTITIES,
 )
+from custom_components.danfoss_ally_gateway.coordinator import RoomCoordinator
 
 
 @pytest.fixture(autouse=True)
@@ -32,7 +35,6 @@ class MockBackend(DanfossBackend):
     """
 
     # Satisfy ABC by defining all abstract methods at class level.
-    # These will be replaced by AsyncMock instances in __init__.
     async def async_set_external_temperature(self, trv_id, temperature):
         """Placeholder."""
 
@@ -123,6 +125,47 @@ def mock_backend(hass):
     return MockBackend(hass)
 
 
+# ── Room subentry data helpers ────────────────────────────────────────
+
+
+def make_subentry_data(
+    room_name: str = "Living Room",
+    trv_ids: list[str] | None = None,
+) -> dict[str, Any]:
+    """Build a subentry data dict for creating a RoomCoordinator."""
+    return {
+        CONF_ROOM_NAME: room_name,
+        CONF_TRV_ENTITIES: trv_ids or ["trv_1", "trv_2"],
+    }
+
+
+@pytest.fixture
+def subentry_data():
+    """Default subentry data with two TRVs."""
+    return make_subentry_data()
+
+
+@pytest.fixture
+def single_trv_subentry_data():
+    """Subentry data with a single TRV."""
+    return make_subentry_data(trv_ids=["trv_1"])
+
+
+# ── Coordinator fixtures ──────────────────────────────────────────────
+
+
+@pytest.fixture
+def coordinator(hass, mock_backend, subentry_data):
+    """Create a RoomCoordinator (not yet set up)."""
+    return RoomCoordinator(hass, mock_backend, subentry_data)
+
+
+@pytest.fixture
+def single_trv_coordinator(hass, mock_backend, single_trv_subentry_data):
+    """Create a single-TRV RoomCoordinator (not yet set up)."""
+    return RoomCoordinator(hass, mock_backend, single_trv_subentry_data)
+
+
 # ── TRVState factory ──────────────────────────────────────────────────
 
 
@@ -131,6 +174,7 @@ def make_trv_state(
     local_temperature: float | None = 21.0,
     occupied_heating_setpoint: float | None = 22.0,
     pi_heating_demand: int | None = 50,
+    heat_required: bool | None = True,
     load_estimate: int | None = 100,
     window_open_detection: int | None = 0,
     setpoint_change_source: int | None = None,
@@ -144,6 +188,7 @@ def make_trv_state(
         local_temperature=local_temperature,
         occupied_heating_setpoint=occupied_heating_setpoint,
         pi_heating_demand=pi_heating_demand,
+        heat_required=heat_required,
         load_estimate=load_estimate,
         window_open_detection=window_open_detection,
         setpoint_change_source=setpoint_change_source,

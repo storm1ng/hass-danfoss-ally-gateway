@@ -16,6 +16,7 @@ class TRVState:
     local_temperature: float | None = None
     occupied_heating_setpoint: float | None = None
     pi_heating_demand: int | None = None
+    heat_required: bool | None = None
     load_estimate: int | None = None
     load_balancing_enable: bool | None = None
     heat_available: bool | None = None

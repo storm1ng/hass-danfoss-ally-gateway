@@ -15,6 +15,16 @@ BACKEND_ZHA: Final = "zha"
 CONF_BACKEND: Final = "backend"
 CONF_MQTT_BASE_TOPIC: Final = "mqtt_base_topic"
 
+# ── Room config keys ───────────────────────────────────────────────────
+CONF_ROOM_NAME: Final = "room_name"
+CONF_TRV_ENTITIES: Final = "trv_entities"
+
+# ── Availability ───────────────────────────────────────────────────────
+TRV_AVAILABILITY_TIMEOUT: Final = 2 * 60 * 60  # 2 hours without update = unavailable
+
+# ── Window open detection states ───────────────────────────────────────
+WINDOW_OPEN_DETECTED: Final = 3
+
 # ── Special values ─────────────────────────────────────────────────────
 EXTERNAL_TEMP_DISABLED: Final = -8000  # Value to send to disable external temp
 
@@ -24,6 +34,7 @@ SETPOINT_TYPE_USER: Final = 1  # Aggressive motor response (manual dial change)
 # ── Z2M attribute name mappings ────────────────────────────────────────
 Z2M_ATTR_EXTERNAL_MEASURED_ROOM_SENSOR: Final = "external_measured_room_sensor"
 Z2M_ATTR_HEAT_AVAILABLE: Final = "heat_available"
+Z2M_ATTR_HEAT_REQUIRED: Final = "heat_required"
 Z2M_ATTR_LOAD_BALANCING_ENABLE: Final = "load_balancing_enable"
 Z2M_ATTR_LOAD_ROOM_MEAN: Final = "load_room_mean"
 Z2M_ATTR_LOAD_ESTIMATE: Final = "load_estimate"

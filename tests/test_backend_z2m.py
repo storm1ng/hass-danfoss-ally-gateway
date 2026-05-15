@@ -168,6 +168,7 @@ class TestZ2MStringConversions:
             "load_estimate": 842,
             "load_balancing_enable": True,
             "heat_available": True,
+            "heat_required": True,
             "preheat_status": False,
             "radiator_covered": False,
             "window_open_internal": "closed",
@@ -181,6 +182,7 @@ class TestZ2MStringConversions:
         assert state.window_open_detection == 1  # "closed" → 1
         assert state.setpoint_change_source == 2  # "externally" → 2
         assert state.heat_available is True
+        assert state.heat_required is True
         assert state.preheat_status is False
         assert state.external_window_open is False
         assert state.radiator_covered is False
