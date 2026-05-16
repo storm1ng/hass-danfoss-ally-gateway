@@ -13,6 +13,7 @@ from custom_components.danfoss_ally_gateway.const import (
     CONF_BACKEND,
     CONF_MQTT_BASE_TOPIC,
     CONF_ROOM_NAME,
+    CONF_TEMP_SENSOR,
     CONF_TRV_ENTITIES,
 )
 from custom_components.danfoss_ally_gateway.coordinator import RoomCoordinator
@@ -131,11 +132,13 @@ def mock_backend(hass):
 def make_subentry_data(
     room_name: str = "Living Room",
     trv_ids: list[str] | None = None,
+    temp_sensor: str = "",
 ) -> dict[str, Any]:
     """Build a subentry data dict for creating a RoomCoordinator."""
     return {
         CONF_ROOM_NAME: room_name,
         CONF_TRV_ENTITIES: trv_ids or ["trv_1", "trv_2"],
+        CONF_TEMP_SENSOR: temp_sensor,
     }
 
 

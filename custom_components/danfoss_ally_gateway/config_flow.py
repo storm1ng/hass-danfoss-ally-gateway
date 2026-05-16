@@ -8,6 +8,7 @@ from __future__ import annotations
 from typing import Any
 
 import voluptuous as vol
+from homeassistant.components.sensor import SensorDeviceClass
 from homeassistant.config_entries import (
     ConfigEntry,
     ConfigFlow,
@@ -25,6 +26,7 @@ from .const import (
     CONF_BACKEND,
     CONF_MQTT_BASE_TOPIC,
     CONF_ROOM_NAME,
+    CONF_TEMP_SENSOR,
     CONF_TRV_ENTITIES,
     DOMAIN,
     SUBENTRY_ROOM,
@@ -232,6 +234,7 @@ class RoomSubentryFlowHandler(ConfigSubentryFlow):
                         CONF_ROOM_NAME: room_name,
                         CONF_AREA: user_input.get(CONF_AREA, ""),
                         CONF_TRV_ENTITIES: trv_entities,
+                        CONF_TEMP_SENSOR: user_input.get(CONF_TEMP_SENSOR, ""),
                     },
                 )
 
@@ -247,6 +250,12 @@ class RoomSubentryFlowHandler(ConfigSubentryFlow):
                     vol.Required(CONF_ROOM_NAME): selector.TextSelector(),
                     vol.Optional(CONF_AREA): selector.AreaSelector(),
                     vol.Required(CONF_TRV_ENTITIES): trv_selector,
+                    vol.Optional(CONF_TEMP_SENSOR): selector.EntitySelector(
+                        selector.EntitySelectorConfig(
+                            domain="sensor",
+                            device_class=SensorDeviceClass.TEMPERATURE,
+                        )
+                    ),
                 }
             ),
             errors=errors,
@@ -277,6 +286,7 @@ class RoomSubentryFlowHandler(ConfigSubentryFlow):
                         CONF_ROOM_NAME: room_name,
                         CONF_AREA: user_input.get(CONF_AREA, ""),
                         CONF_TRV_ENTITIES: trv_entities,
+                        CONF_TEMP_SENSOR: user_input.get(CONF_TEMP_SENSOR, ""),
                     },
                 )
 
@@ -299,6 +309,17 @@ class RoomSubentryFlowHandler(ConfigSubentryFlow):
                         CONF_TRV_ENTITIES,
                         default=existing.get(CONF_TRV_ENTITIES, []),
                     ): trv_selector,
+                    vol.Optional(
+                        CONF_TEMP_SENSOR,
+                        description={
+                            "suggested_value": existing.get(CONF_TEMP_SENSOR, "")
+                        },
+                    ): selector.EntitySelector(
+                        selector.EntitySelectorConfig(
+                            domain="sensor",
+                            device_class=SensorDeviceClass.TEMPERATURE,
+                        )
+                    ),
                 }
             ),
             errors=errors,

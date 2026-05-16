@@ -19,6 +19,7 @@ CONF_MQTT_BASE_TOPIC: Final = "mqtt_base_topic"
 CONF_ROOM_NAME: Final = "room_name"
 CONF_AREA: Final = "area"
 CONF_TRV_ENTITIES: Final = "trv_entities"
+CONF_TEMP_SENSOR: Final = "temperature_sensor"
 
 # ── Subentry types ─────────────────────────────────────────────────────
 SUBENTRY_ROOM: Final = "room"
@@ -31,6 +32,18 @@ WINDOW_OPEN_DETECTED: Final = 3
 
 # ── Special values ─────────────────────────────────────────────────────
 EXTERNAL_TEMP_DISABLED: Final = -8000  # Value to send to disable external temp
+
+# ── Timing constants (seconds) ────────────────────────────────────────
+# External temperature forwarding - exposed mode (radiator_covered=false)
+EXT_TEMP_EXPOSED_MIN_INTERVAL: Final = 30 * 60  # 30 minutes
+EXT_TEMP_EXPOSED_MAX_INTERVAL: Final = 3 * 60 * 60  # 3 hours
+
+# External temperature forwarding - covered mode (radiator_covered=true)
+EXT_TEMP_COVERED_MIN_INTERVAL: Final = 5 * 60  # 5 minutes
+EXT_TEMP_COVERED_MAX_INTERVAL: Final = 30 * 60  # 30 minutes
+
+# Temperature change threshold for immediate send
+EXT_TEMP_CHANGE_THRESHOLD: Final = 0.1  # Kelvin / degrees C
 
 # ── Setpoint command types ─────────────────────────────────────────────
 SETPOINT_TYPE_USER: Final = 1  # Aggressive motor response (manual dial change)

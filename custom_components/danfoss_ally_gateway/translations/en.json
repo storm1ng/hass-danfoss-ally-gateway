@@ -46,11 +46,13 @@
                     "data": {
                         "room_name": "Room name",
                         "area": "Area",
-                        "trv_entities": "TRV devices"
+                        "trv_entities": "TRV devices",
+                        "temperature_sensor": "External temperature sensor"
                     },
                     "data_description": {
                         "trv_entities": "Select the Danfoss Ally, Popp, or Hive TRV devices for this room.",
-                        "area": "Assign the virtual room device to a Home Assistant area."
+                        "area": "Assign the virtual room device to a Home Assistant area.",
+                        "temperature_sensor": "An external temperature sensor entity to use instead of the TRV's built-in sensor. Can be any HA temperature sensor."
                     }
                 },
                 "reconfigure": {
@@ -59,11 +61,13 @@
                     "data": {
                         "room_name": "Room name",
                         "area": "Area",
-                        "trv_entities": "TRV devices"
+                        "trv_entities": "TRV devices",
+                        "temperature_sensor": "External temperature sensor"
                     },
                     "data_description": {
                         "trv_entities": "Select the Danfoss Ally, Popp, or Hive TRV devices for this room.",
-                        "area": "Assign the virtual room device to a Home Assistant area."
+                        "area": "Assign the virtual room device to a Home Assistant area.",
+                        "temperature_sensor": "An external temperature sensor entity to use instead of the TRV's built-in sensor."
                     }
                 }
             },
