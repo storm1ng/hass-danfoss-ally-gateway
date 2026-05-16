@@ -2,6 +2,7 @@
 
 Provides per-room binary sensors:
 - Heat Required: any TRV has pi_heating_demand > 0
+- Heat Available: heat source is providing heat
 """
 
 from __future__ import annotations
@@ -49,6 +50,7 @@ def create_room_entities(
     """Create binary sensor entities for a single room coordinator."""
     return [
         DanfossAllyHeatRequired(coordinator, config_entry_id, subentry_id),
+        DanfossAllyHeatAvailable(coordinator, config_entry_id, subentry_id),
     ]
 
 
@@ -119,3 +121,24 @@ class DanfossAllyHeatRequired(_DanfossAllyBinarySensorBase):
     def is_on(self) -> bool:
         """Return True if any TRV demands heat."""
         return self._coordinator.state.heat_required
+
+
+class DanfossAllyHeatAvailable(_DanfossAllyBinarySensorBase):
+    """Binary sensor: heat is available from the heating system."""
+
+    _attr_translation_key = "heat_available"
+
+    def __init__(
+        self,
+        coordinator: RoomCoordinator,
+        config_entry_id: str,
+        subentry_id: str,
+    ) -> None:
+        """Initialize heat available sensor."""
+        super().__init__(coordinator, config_entry_id, subentry_id, "heat_available")
+        self._attr_name = f"{coordinator.room_name} Heat Available"
+
+    @property
+    def is_on(self) -> bool | None:
+        """Return True if heat is available."""
+        return self._coordinator.state.heat_available

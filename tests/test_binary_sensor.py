@@ -1,6 +1,7 @@
 """Tests for binary sensor entities."""
 
 from custom_components.danfoss_ally_gateway.binary_sensor import (
+    DanfossAllyHeatAvailable,
     DanfossAllyHeatRequired,
     create_room_entities,
 )
@@ -23,25 +24,35 @@ def _make_entities(hass, mock_backend, subentry_data):
 class TestBinarySensorCreation:
     """Tests for binary sensor entity creation."""
 
-    def test_create_room_entities_returns_one(self, hass, mock_backend, subentry_data):
-        """One binary sensor is created per room (heat_required only)."""
+    def test_create_room_entities_returns_two(self, hass, mock_backend, subentry_data):
+        """Two binary sensors are created per room."""
         _, entities = _make_entities(hass, mock_backend, subentry_data)
-        assert len(entities) == 1
+        assert len(entities) == 2
 
-    def test_entity_type(self, hass, mock_backend, subentry_data):
-        """Check entity type is DanfossAllyHeatRequired."""
+    def test_entity_types(self, hass, mock_backend, subentry_data):
+        """Check both entity types are present."""
         _, entities = _make_entities(hass, mock_backend, subentry_data)
-        assert isinstance(entities[0], DanfossAllyHeatRequired)
+        types = {type(e) for e in entities}
+        assert types == {
+            DanfossAllyHeatRequired,
+            DanfossAllyHeatAvailable,
+        }
 
-    def test_unique_id(self, hass, mock_backend, subentry_data):
-        """Entity has correct unique_id."""
+    def test_unique_ids(self, hass, mock_backend, subentry_data):
+        """Each entity has a distinct unique_id."""
         _, entities = _make_entities(hass, mock_backend, subentry_data)
-        assert entities[0].unique_id == f"{DOMAIN}_entry1_sub1_heat_required"
+        uids = {e.unique_id for e in entities}
+        assert len(uids) == 2
+        expected_suffixes = {"heat_required", "heat_available"}
+        for suffix in expected_suffixes:
+            assert f"{DOMAIN}_entry1_sub1_{suffix}" in uids
 
-    def test_name(self, hass, mock_backend, subentry_data):
-        """Entity name includes the room name."""
+    def test_names(self, hass, mock_backend, subentry_data):
+        """Entity names include the room name."""
         _, entities = _make_entities(hass, mock_backend, subentry_data)
-        assert entities[0].name == "Living Room Heat Required"
+        names = {e.name for e in entities}
+        assert "Living Room Heat Required" in names
+        assert "Living Room Heat Available" in names
 
 
 # ── Device Info ───────────────────────────────────────────────────────
@@ -51,10 +62,11 @@ class TestBinarySensorDeviceInfo:
     """Tests for device info on binary sensor entities."""
 
     def test_device_info_present(self, hass, mock_backend, subentry_data):
-        """Entity has device_info with correct identifiers."""
+        """All entities have device_info with correct identifiers."""
         _, entities = _make_entities(hass, mock_backend, subentry_data)
-        assert entities[0].device_info is not None
-        assert (DOMAIN, "entry1_sub1") in entities[0].device_info["identifiers"]  # type: ignore[typeddict-item]
+        for entity in entities:
+            assert entity.device_info is not None
+            assert (DOMAIN, "entry1_sub1") in entity.device_info["identifiers"]  # type: ignore[typeddict-item]
 
     def test_device_info_name(self, hass, mock_backend, subentry_data):
         """Device name follows 'Danfoss Ally <room_name>' pattern."""
@@ -62,41 +74,84 @@ class TestBinarySensorDeviceInfo:
         assert entities[0].device_info["name"] == "Danfoss Ally Living Room"  # type: ignore[typeddict-item]
 
     def test_subentry_id_stored(self, hass, mock_backend, subentry_data):
-        """Entity stores subentry_id for internal use."""
+        """All entities store subentry_id for internal use."""
         _, entities = _make_entities(hass, mock_backend, subentry_data)
-        assert entities[0]._subentry_id == "sub1"
+        for entity in entities:
+            assert entity._subentry_id == "sub1"
 
 
 # ── Device Classes ────────────────────────────────────────────────────
 
 
-class TestHeatRequiredDeviceClass:
-    """Tests for heat required device class."""
+class TestBinarySensorDeviceClasses:
+    """Tests for binary sensor device classes."""
 
-    def test_no_device_class(self, hass, mock_backend, subentry_data):
+    def test_heat_required_no_device_class(self, hass, mock_backend, subentry_data):
         """heat_required uses translation_key instead of device_class."""
         _, entities = _make_entities(hass, mock_backend, subentry_data)
-        assert entities[0].device_class is None
+        heat_req = next(e for e in entities if isinstance(e, DanfossAllyHeatRequired))
+        assert heat_req.device_class is None
 
-    def test_translation_key(self, hass, mock_backend, subentry_data):
+    def test_heat_required_translation_key(self, hass, mock_backend, subentry_data):
         _, entities = _make_entities(hass, mock_backend, subentry_data)
-        assert entities[0].translation_key == "heat_required"
+        heat_req = next(e for e in entities if isinstance(e, DanfossAllyHeatRequired))
+        assert heat_req.translation_key == "heat_required"
+
+    def test_heat_available_no_device_class(self, hass, mock_backend, subentry_data):
+        """heat_available uses translation_key instead of device_class."""
+        _, entities = _make_entities(hass, mock_backend, subentry_data)
+        heat_avail = next(
+            e for e in entities if isinstance(e, DanfossAllyHeatAvailable)
+        )
+        assert heat_avail.device_class is None
+
+    def test_heat_available_translation_key(self, hass, mock_backend, subentry_data):
+        _, entities = _make_entities(hass, mock_backend, subentry_data)
+        heat_avail = next(
+            e for e in entities if isinstance(e, DanfossAllyHeatAvailable)
+        )
+        assert heat_avail.translation_key == "heat_available"
 
 
 # ── State ─────────────────────────────────────────────────────────────
 
 
-class TestHeatRequiredState:
-    """Tests for heat required state values."""
+class TestBinarySensorState:
+    """Tests for binary sensor state values."""
 
-    def test_off_by_default(self, hass, mock_backend, subentry_data):
+    def test_heat_required_off_by_default(self, hass, mock_backend, subentry_data):
         coord, entities = _make_entities(hass, mock_backend, subentry_data)
-        assert entities[0].is_on is False
+        heat_req = next(e for e in entities if isinstance(e, DanfossAllyHeatRequired))
+        assert heat_req.is_on is False
 
-    def test_on(self, hass, mock_backend, subentry_data):
+    def test_heat_required_on(self, hass, mock_backend, subentry_data):
         coord, entities = _make_entities(hass, mock_backend, subentry_data)
         coord.state.heat_required = True
-        assert entities[0].is_on is True
+        heat_req = next(e for e in entities if isinstance(e, DanfossAllyHeatRequired))
+        assert heat_req.is_on is True
+
+    def test_heat_available_none_by_default(self, hass, mock_backend, subentry_data):
+        coord, entities = _make_entities(hass, mock_backend, subentry_data)
+        heat_avail = next(
+            e for e in entities if isinstance(e, DanfossAllyHeatAvailable)
+        )
+        assert heat_avail.is_on is None
+
+    def test_heat_available_on(self, hass, mock_backend, subentry_data):
+        coord, entities = _make_entities(hass, mock_backend, subentry_data)
+        coord.state.heat_available = True
+        heat_avail = next(
+            e for e in entities if isinstance(e, DanfossAllyHeatAvailable)
+        )
+        assert heat_avail.is_on is True
+
+    def test_heat_available_off(self, hass, mock_backend, subentry_data):
+        coord, entities = _make_entities(hass, mock_backend, subentry_data)
+        coord.state.heat_available = False
+        heat_avail = next(
+            e for e in entities if isinstance(e, DanfossAllyHeatAvailable)
+        )
+        assert heat_avail.is_on is False
 
 
 # ── Availability ──────────────────────────────────────────────────────
@@ -107,11 +162,13 @@ class TestBinarySensorAvailability:
 
     def test_unavailable_by_default(self, hass, mock_backend, subentry_data):
         coord, entities = _make_entities(hass, mock_backend, subentry_data)
-        assert entities[0].available is False
+        for entity in entities:
+            assert entity.available is False
 
     def test_available_when_coordinator_available(
         self, hass, mock_backend, subentry_data
     ):
         coord, entities = _make_entities(hass, mock_backend, subentry_data)
         coord.state.available = True
-        assert entities[0].available is True
+        for entity in entities:
+            assert entity.available is True
