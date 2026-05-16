@@ -234,3 +234,10 @@ class RoomCoordinator:
             < TRV_AVAILABILITY_TIMEOUT
             for trv_id in self._trv_ids
         )
+
+    # ── Setpoint control ──────────────────────────────────────────────
+
+    async def async_set_room_temperature(self, temperature: float) -> None:
+        """Set the target temperature for all TRVs in the room."""
+        for trv_id in self._trv_ids:
+            await self._backend.async_set_occupied_heating_setpoint(trv_id, temperature)
