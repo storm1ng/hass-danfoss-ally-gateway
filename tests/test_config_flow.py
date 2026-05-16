@@ -28,8 +28,8 @@ class TestMainConfigFlow:
         result = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": config_entries.SOURCE_USER}
         )
-        assert result["type"] == FlowResultType.FORM
-        assert result["step_id"] == "user"
+        assert result["type"] == FlowResultType.FORM  # type: ignore[typeddict-item]
+        assert result["step_id"] == "user"  # type: ignore[typeddict-item]
 
     async def test_z2m_backend_flow(self, hass: HomeAssistant):
         # Step 1: Select Z2M backend
@@ -40,18 +40,18 @@ class TestMainConfigFlow:
             result["flow_id"],
             {CONF_BACKEND: BACKEND_Z2M},
         )
-        assert result["type"] == FlowResultType.FORM
-        assert result["step_id"] == "z2m"
+        assert result["type"] == FlowResultType.FORM  # type: ignore[typeddict-item]
+        assert result["step_id"] == "z2m"  # type: ignore[typeddict-item]
 
         # Step 2: Configure Z2M topic
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
             {CONF_MQTT_BASE_TOPIC: "zigbee2mqtt"},
         )
-        assert result["type"] == FlowResultType.CREATE_ENTRY
-        assert result["title"] == "Danfoss Ally Gateway (Z2M: zigbee2mqtt)"
-        assert result["data"][CONF_BACKEND] == BACKEND_Z2M
-        assert result["data"][CONF_MQTT_BASE_TOPIC] == "zigbee2mqtt"
+        assert result["type"] == FlowResultType.CREATE_ENTRY  # type: ignore[typeddict-item]
+        assert result["title"] == "Danfoss Ally Gateway (Z2M: zigbee2mqtt)"  # type: ignore[typeddict-item]
+        assert result["data"][CONF_BACKEND] == BACKEND_Z2M  # type: ignore[typeddict-item]
+        assert result["data"][CONF_MQTT_BASE_TOPIC] == "zigbee2mqtt"  # type: ignore[typeddict-item]
 
     async def test_zha_backend_flow(self, hass: HomeAssistant):
         result = await hass.config_entries.flow.async_init(
@@ -61,16 +61,16 @@ class TestMainConfigFlow:
             result["flow_id"],
             {CONF_BACKEND: BACKEND_ZHA},
         )
-        assert result["type"] == FlowResultType.FORM
-        assert result["step_id"] == "zha"
+        assert result["type"] == FlowResultType.FORM  # type: ignore[typeddict-item]
+        assert result["step_id"] == "zha"  # type: ignore[typeddict-item]
 
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
             {},
         )
-        assert result["type"] == FlowResultType.CREATE_ENTRY
-        assert result["title"] == "Danfoss Ally Gateway (ZHA)"
-        assert result["data"][CONF_BACKEND] == BACKEND_ZHA
+        assert result["type"] == FlowResultType.CREATE_ENTRY  # type: ignore[typeddict-item]
+        assert result["title"] == "Danfoss Ally Gateway (ZHA)"  # type: ignore[typeddict-item]
+        assert result["data"][CONF_BACKEND] == BACKEND_ZHA  # type: ignore[typeddict-item]
 
     async def test_z2m_custom_topic(self, hass: HomeAssistant):
         result = await hass.config_entries.flow.async_init(
@@ -84,8 +84,8 @@ class TestMainConfigFlow:
             result["flow_id"],
             {CONF_MQTT_BASE_TOPIC: "custom/topic"},
         )
-        assert result["type"] == FlowResultType.CREATE_ENTRY
-        assert result["data"][CONF_MQTT_BASE_TOPIC] == "custom/topic"
+        assert result["type"] == FlowResultType.CREATE_ENTRY  # type: ignore[typeddict-item]
+        assert result["data"][CONF_MQTT_BASE_TOPIC] == "custom/topic"  # type: ignore[typeddict-item]
 
     async def test_z2m_duplicate_blocked(self, hass: HomeAssistant):
         """Two entries with the same Z2M topic should be blocked."""
@@ -101,7 +101,7 @@ class TestMainConfigFlow:
             result["flow_id"],
             {CONF_MQTT_BASE_TOPIC: "zigbee2mqtt"},
         )
-        assert result["type"] == FlowResultType.CREATE_ENTRY
+        assert result["type"] == FlowResultType.CREATE_ENTRY  # type: ignore[typeddict-item]
 
         # Try to create duplicate
         result2 = await hass.config_entries.flow.async_init(
@@ -115,8 +115,8 @@ class TestMainConfigFlow:
             result2["flow_id"],
             {CONF_MQTT_BASE_TOPIC: "zigbee2mqtt"},
         )
-        assert result2["type"] == FlowResultType.ABORT
-        assert result2["reason"] == "already_configured"
+        assert result2["type"] == FlowResultType.ABORT  # type: ignore[typeddict-item]
+        assert result2["reason"] == "already_configured"  # type: ignore[typeddict-item]
 
     async def test_zha_duplicate_blocked(self, hass: HomeAssistant):
         # Create first
@@ -131,7 +131,7 @@ class TestMainConfigFlow:
             result["flow_id"],
             {},
         )
-        assert result["type"] == FlowResultType.CREATE_ENTRY
+        assert result["type"] == FlowResultType.CREATE_ENTRY  # type: ignore[typeddict-item]
 
         # Duplicate
         result2 = await hass.config_entries.flow.async_init(
@@ -145,7 +145,7 @@ class TestMainConfigFlow:
             result2["flow_id"],
             {},
         )
-        assert result2["type"] == FlowResultType.ABORT
+        assert result2["type"] == FlowResultType.ABORT  # type: ignore[typeddict-item]
 
 
 # ── TRV Selector Tests ────────────────────────────────────────────────

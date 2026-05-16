@@ -43,7 +43,7 @@ class TestClimateEntityCreation:
         coord = RoomCoordinator(hass, mock_backend, subentry_data)
         entity = create_room_entities(coord, "entry1", "sub1")[0]
         assert entity.device_info is not None
-        assert (DOMAIN, "entry1_sub1") in entity.device_info["identifiers"]
+        assert (DOMAIN, "entry1_sub1") in entity.device_info["identifiers"]  # type: ignore[typeddict-item]
 
     def test_subentry_id_stored(self, hass, mock_backend, subentry_data):
         """Entity stores subentry_id for internal use."""

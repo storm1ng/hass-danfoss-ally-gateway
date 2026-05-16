@@ -367,7 +367,9 @@ class TestZ2MMessageHandling:
         msg = MagicMock()
         msg.topic = "zigbee2mqtt/trv1"
         msg.payload = "not valid json"
-        handler(msg)  # Should not raise
+
+        # Should not raise
+        handler(msg)  # type: ignore[misc]
 
         assert "trv1" not in backend._trv_states
 
@@ -389,7 +391,7 @@ class TestZ2MMessageHandling:
         msg = MagicMock()
         msg.topic = "zigbee2mqtt/trv1"
         msg.payload = json.dumps([1, 2, 3])
-        handler(msg)
+        handler(msg)  # type: ignore[misc]
 
         assert "trv1" not in backend._trv_states
 
@@ -413,7 +415,7 @@ class TestZ2MMessageHandling:
         msg = MagicMock()
         msg.topic = "zigbee2mqtt/trv1"
         msg.payload = json.dumps({Z2M_ATTR_LOCAL_TEMPERATURE: 20.0})
-        handler(msg)
+        handler(msg)  # type: ignore[misc]
 
         assert len(received) == 1
         assert received[0][0] == "trv1"
