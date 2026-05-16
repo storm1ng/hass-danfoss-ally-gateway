@@ -9,23 +9,63 @@ from typing import Any
 
 import voluptuous as vol
 from homeassistant.config_entries import (
+    ConfigEntry,
     ConfigFlow,
     ConfigFlowResult,
+    ConfigSubentryFlow,
+    SubentryFlowResult,
 )
+from homeassistant.core import callback
 from homeassistant.helpers import selector
 
 from .const import (
     BACKEND_Z2M,
     BACKEND_ZHA,
+    CONF_AREA,
     CONF_BACKEND,
     CONF_MQTT_BASE_TOPIC,
+    CONF_ROOM_NAME,
+    CONF_TRV_ENTITIES,
     DOMAIN,
+    SUBENTRY_ROOM,
+    SUPPORTED_TRV_DEVICES_Z2M,
+    SUPPORTED_TRV_DEVICES_ZHA,
 )
 
 BACKEND_OPTIONS = [
     selector.SelectOptionDict(value=BACKEND_Z2M, label="Zigbee2MQTT"),
     selector.SelectOptionDict(value=BACKEND_ZHA, label="ZHA"),
 ]
+
+
+def _build_trv_selector(backend: str) -> selector.Selector:
+    """Build a DeviceSelector for TRV selection based on backend type.
+
+    For Z2M: filters MQTT devices by supported manufacturers/models.
+    For ZHA: filters ZHA devices by supported manufacturers/models.
+    Returns device registry IDs which are resolved to backend-specific
+    identifiers at coordinator setup time.
+    """
+    if backend == BACKEND_Z2M:
+        devices = SUPPORTED_TRV_DEVICES_Z2M
+        integration = "mqtt"
+    else:
+        devices = SUPPORTED_TRV_DEVICES_ZHA
+        integration = "zha"
+
+    return selector.DeviceSelector(
+        selector.DeviceSelectorConfig(
+            filter=[
+                selector.DeviceFilterSelectorConfig(
+                    manufacturer=dev["manufacturer"],
+                    model=dev["model"],
+                    integration=integration,
+                )
+                for dev in devices
+            ],
+            multiple=True,
+        )
+    )
 
 
 class DanfossAllyGatewayConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -120,6 +160,14 @@ class DanfossAllyGatewayConfigFlow(ConfigFlow, domain=DOMAIN):
             data_schema=vol.Schema({}),
         )
 
+    @classmethod
+    @callback
+    def async_get_supported_subentry_types(
+        cls, config_entry: ConfigEntry
+    ) -> dict[str, type[ConfigSubentryFlow]]:
+        """Return subentries supported by this integration."""
+        return {SUBENTRY_ROOM: RoomSubentryFlowHandler}
+
     async def async_step_reconfigure(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
@@ -156,6 +204,101 @@ class DanfossAllyGatewayConfigFlow(ConfigFlow, domain=DOMAIN):
                     vol.Required(
                         CONF_MQTT_BASE_TOPIC, default=current_topic
                     ): selector.TextSelector(),
+                }
+            ),
+            errors=errors,
+        )
+
+
+class RoomSubentryFlowHandler(ConfigSubentryFlow):
+    """Handle subentry flow for adding and modifying a room."""
+
+    async def async_step_user(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Handle adding a new room."""
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            room_name = user_input[CONF_ROOM_NAME]
+            trv_entities = user_input[CONF_TRV_ENTITIES]
+
+            if not trv_entities:
+                errors[CONF_TRV_ENTITIES] = "no_trvs_selected"
+            else:
+                return self.async_create_entry(
+                    title=room_name,
+                    data={
+                        CONF_ROOM_NAME: room_name,
+                        CONF_AREA: user_input.get(CONF_AREA, ""),
+                        CONF_TRV_ENTITIES: trv_entities,
+                    },
+                )
+
+        config_entry = self._get_entry()
+        backend = config_entry.data.get(CONF_BACKEND, BACKEND_Z2M)
+
+        trv_selector = _build_trv_selector(backend)
+
+        return self.async_show_form(
+            step_id="user",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_ROOM_NAME): selector.TextSelector(),
+                    vol.Optional(CONF_AREA): selector.AreaSelector(),
+                    vol.Required(CONF_TRV_ENTITIES): trv_selector,
+                }
+            ),
+            errors=errors,
+        )
+
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Handle reconfiguring an existing room."""
+        config_entry = self._get_entry()
+        subentry = self._get_reconfigure_subentry()
+        existing = subentry.data
+
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            room_name = user_input[CONF_ROOM_NAME]
+            trv_entities = user_input[CONF_TRV_ENTITIES]
+
+            if not trv_entities:
+                errors[CONF_TRV_ENTITIES] = "no_trvs_selected"
+            else:
+                return self.async_update_and_abort(
+                    config_entry,
+                    subentry,
+                    title=room_name,
+                    data={
+                        CONF_ROOM_NAME: room_name,
+                        CONF_AREA: user_input.get(CONF_AREA, ""),
+                        CONF_TRV_ENTITIES: trv_entities,
+                    },
+                )
+
+        backend = config_entry.data.get(CONF_BACKEND, BACKEND_Z2M)
+        trv_selector = _build_trv_selector(backend)
+
+        return self.async_show_form(
+            step_id="reconfigure",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_ROOM_NAME,
+                        default=existing.get(CONF_ROOM_NAME, ""),
+                    ): selector.TextSelector(),
+                    vol.Optional(
+                        CONF_AREA,
+                        description={"suggested_value": existing.get(CONF_AREA, "")},
+                    ): selector.AreaSelector(),
+                    vol.Required(
+                        CONF_TRV_ENTITIES,
+                        default=existing.get(CONF_TRV_ENTITIES, []),
+                    ): trv_selector,
                 }
             ),
             errors=errors,

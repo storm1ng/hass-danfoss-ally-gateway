@@ -35,5 +35,42 @@
             "already_configured": "This backend is already configured.",
             "zha_no_options": "ZHA backend has no configurable options."
         }
+    },
+    "config_subentries": {
+        "room": {
+            "title": "Room",
+            "step": {
+                "user": {
+                    "title": "Add Room",
+                    "description": "Configure a room with Danfoss Ally TRVs. Select your TRV devices from the list.",
+                    "data": {
+                        "room_name": "Room name",
+                        "area": "Area",
+                        "trv_entities": "TRV devices"
+                    },
+                    "data_description": {
+                        "trv_entities": "Select the Danfoss Ally, Popp, or Hive TRV devices for this room.",
+                        "area": "Assign the virtual room device to a Home Assistant area."
+                    }
+                },
+                "reconfigure": {
+                    "title": "Reconfigure Room",
+                    "description": "Update the room configuration.",
+                    "data": {
+                        "room_name": "Room name",
+                        "area": "Area",
+                        "trv_entities": "TRV devices"
+                    },
+                    "data_description": {
+                        "trv_entities": "Select the Danfoss Ally, Popp, or Hive TRV devices for this room.",
+                        "area": "Assign the virtual room device to a Home Assistant area."
+                    }
+                }
+            },
+            "error": {
+                "no_trvs_selected": "At least one TRV must be selected."
+            },
+            "abort": {}
+        }
     }
 }

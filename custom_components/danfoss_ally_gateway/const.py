@@ -17,7 +17,11 @@ CONF_MQTT_BASE_TOPIC: Final = "mqtt_base_topic"
 
 # ── Room config keys ───────────────────────────────────────────────────
 CONF_ROOM_NAME: Final = "room_name"
+CONF_AREA: Final = "area"
 CONF_TRV_ENTITIES: Final = "trv_entities"
+
+# ── Subentry types ─────────────────────────────────────────────────────
+SUBENTRY_ROOM: Final = "room"
 
 # ── Availability ───────────────────────────────────────────────────────
 TRV_AVAILABILITY_TIMEOUT: Final = 2 * 60 * 60  # 2 hours without update = unavailable
@@ -30,6 +34,23 @@ EXTERNAL_TEMP_DISABLED: Final = -8000  # Value to send to disable external temp
 
 # ── Setpoint command types ─────────────────────────────────────────────
 SETPOINT_TYPE_USER: Final = 1  # Aggressive motor response (manual dial change)
+
+# ── Supported TRV device filters ───────────────────────────────────────
+SUPPORTED_TRV_DEVICES_Z2M: Final = [
+    {"manufacturer": "Danfoss", "model": "Ally thermostat"},
+    {"manufacturer": "Popp", "model": "Smart thermostat"},
+    {"manufacturer": "Hive", "model": "Radiator valve"},
+]
+
+SUPPORTED_TRV_DEVICES_ZHA: Final = [
+    {"manufacturer": "Danfoss", "model": "eTRV0100"},
+    {"manufacturer": "Danfoss", "model": "eTRV0101"},
+    {"manufacturer": "Danfoss", "model": "eTRV0103"},
+    {"manufacturer": "D5X84YU", "model": "eT093WRO"},
+    {"manufacturer": "D5X84YU", "model": "eT093WRG"},
+    {"manufacturer": "Danfoss", "model": "TRV001"},
+    {"manufacturer": "Danfoss", "model": "TRV003"},
+]
 
 # ── Z2M attribute name mappings ────────────────────────────────────────
 Z2M_ATTR_EXTERNAL_MEASURED_ROOM_SENSOR: Final = "external_measured_room_sensor"

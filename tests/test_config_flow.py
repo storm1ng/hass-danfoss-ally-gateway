@@ -5,13 +5,17 @@ from __future__ import annotations
 from homeassistant import config_entries
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
+from homeassistant.helpers import selector
 
+from custom_components.danfoss_ally_gateway.config_flow import _build_trv_selector
 from custom_components.danfoss_ally_gateway.const import (
     BACKEND_Z2M,
     BACKEND_ZHA,
     CONF_BACKEND,
     CONF_MQTT_BASE_TOPIC,
     DOMAIN,
+    SUPPORTED_TRV_DEVICES_Z2M,
+    SUPPORTED_TRV_DEVICES_ZHA,
 )
 
 # ── Main Config Flow ──────────────────────────────────────────────────
@@ -142,3 +146,72 @@ class TestMainConfigFlow:
             {},
         )
         assert result2["type"] == FlowResultType.ABORT
+
+
+# ── TRV Selector Tests ────────────────────────────────────────────────
+
+
+class TestBuildTrvSelector:
+    """Tests for the _build_trv_selector helper."""
+
+    def test_z2m_returns_device_selector(self):
+        sel = _build_trv_selector(BACKEND_Z2M)
+        assert isinstance(sel, selector.DeviceSelector)
+
+    def test_zha_returns_device_selector(self):
+        sel = _build_trv_selector(BACKEND_ZHA)
+        assert isinstance(sel, selector.DeviceSelector)
+
+    def test_z2m_selector_uses_mqtt_integration(self):
+        sel = _build_trv_selector(BACKEND_Z2M)
+        config = sel.config
+        for f in config["filter"]:
+            assert f["integration"] == "mqtt"
+
+    def test_zha_selector_uses_zha_integration(self):
+        sel = _build_trv_selector(BACKEND_ZHA)
+        config = sel.config
+        for f in config["filter"]:
+            assert f["integration"] == "zha"
+
+    def test_z2m_selector_allows_multiple(self):
+        sel = _build_trv_selector(BACKEND_Z2M)
+        assert sel.config["multiple"] is True
+
+    def test_zha_selector_allows_multiple(self):
+        sel = _build_trv_selector(BACKEND_ZHA)
+        assert sel.config["multiple"] is True
+
+    def test_z2m_filter_count_matches_supported_devices(self):
+        sel = _build_trv_selector(BACKEND_Z2M)
+        assert len(sel.config["filter"]) == len(SUPPORTED_TRV_DEVICES_Z2M)
+
+    def test_zha_filter_count_matches_supported_devices(self):
+        sel = _build_trv_selector(BACKEND_ZHA)
+        assert len(sel.config["filter"]) == len(SUPPORTED_TRV_DEVICES_ZHA)
+
+    def test_z2m_includes_danfoss(self):
+        sel = _build_trv_selector(BACKEND_Z2M)
+        manufacturers = [f["manufacturer"] for f in sel.config["filter"]]
+        assert "Danfoss" in manufacturers
+
+    def test_z2m_includes_popp(self):
+        sel = _build_trv_selector(BACKEND_Z2M)
+        manufacturers = [f["manufacturer"] for f in sel.config["filter"]]
+        assert "Popp" in manufacturers
+
+    def test_z2m_includes_hive(self):
+        sel = _build_trv_selector(BACKEND_Z2M)
+        manufacturers = [f["manufacturer"] for f in sel.config["filter"]]
+        assert "Hive" in manufacturers
+
+    def test_zha_includes_danfoss(self):
+        sel = _build_trv_selector(BACKEND_ZHA)
+        manufacturers = [f["manufacturer"] for f in sel.config["filter"]]
+        assert "Danfoss" in manufacturers
+
+    def test_zha_includes_popp_raw_manufacturer(self):
+        """ZHA uses raw Zigbee manufacturer string 'D5X84YU' for Popp."""
+        sel = _build_trv_selector(BACKEND_ZHA)
+        manufacturers = [f["manufacturer"] for f in sel.config["filter"]]
+        assert "D5X84YU" in manufacturers
