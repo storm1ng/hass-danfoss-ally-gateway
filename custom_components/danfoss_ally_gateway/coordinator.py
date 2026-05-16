@@ -129,7 +129,7 @@ class RoomCoordinator:
             # Z2M: device.name is the Z2M friendly name (MQTT topic segment).
             # Do NOT use name_by_user — HA-side renames don't change the
             # Z2M topic.
-            return device.name
+            return device.name or trv_id
 
         # ZHA Implementation would go here (not implemented yet)
 
