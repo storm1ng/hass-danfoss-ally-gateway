@@ -13,6 +13,8 @@ from homeassistant.helpers import device_registry as dr
 
 from custom_components.danfoss_ally_gateway.backend.z2m import Z2MBackend
 from custom_components.danfoss_ally_gateway.const import (
+    SETPOINT_SOURCE_MANUAL,
+    SETPOINT_TYPE_USER,
     WINDOW_OPEN_DETECTED,
 )
 from custom_components.danfoss_ally_gateway.coordinator import (
@@ -365,6 +367,95 @@ class TestHeatAvailability:
         assert mock_backend.async_set_heat_available.call_count == 2
         for call in mock_backend.async_set_heat_available.call_args_list:
             assert call[0][1] is False
+        await coord.async_teardown()
+
+
+# ── Setpoint Coordination ─────────────────────────────────────────────
+
+
+class TestSetpointCoordination:
+    """Tests for setpoint coordination between TRVs."""
+
+    async def test_manual_dial_forwards_to_others(
+        self, hass, mock_backend, subentry_data
+    ):
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        await coord.async_setup()
+
+        # Initial state
+        old = make_trv_state("trv_1", occupied_heating_setpoint=20.0)
+        mock_backend.fire_state_update("trv_1", old)
+        await hass.async_block_till_done()
+
+        # Manual dial change
+        new = make_trv_state(
+            "trv_1",
+            occupied_heating_setpoint=22.0,
+            setpoint_change_source=SETPOINT_SOURCE_MANUAL,
+        )
+        mock_backend.fire_state_update("trv_1", new)
+        await hass.async_block_till_done()
+
+        # Should forward to trv_2 as Type 1
+        mock_backend.async_send_setpoint_command.assert_called_once_with(
+            "trv_2", 22.0, SETPOINT_TYPE_USER
+        )
+        await coord.async_teardown()
+
+    async def test_no_forward_for_single_trv(
+        self, hass, mock_backend, single_trv_subentry_data
+    ):
+        coord = RoomCoordinator(hass, mock_backend, single_trv_subentry_data)
+        await coord.async_setup()
+
+        old = make_trv_state("trv_1", occupied_heating_setpoint=20.0)
+        mock_backend.fire_state_update("trv_1", old)
+        await hass.async_block_till_done()
+
+        new = make_trv_state(
+            "trv_1",
+            occupied_heating_setpoint=22.0,
+            setpoint_change_source=SETPOINT_SOURCE_MANUAL,
+        )
+        mock_backend.fire_state_update("trv_1", new)
+        await hass.async_block_till_done()
+
+        mock_backend.async_send_setpoint_command.assert_not_called()
+        await coord.async_teardown()
+
+    async def test_no_forward_for_schedule_source(
+        self, hass, mock_backend, subentry_data
+    ):
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        await coord.async_setup()
+
+        old = make_trv_state("trv_1", occupied_heating_setpoint=20.0)
+        mock_backend.fire_state_update("trv_1", old)
+        await hass.async_block_till_done()
+
+        # Schedule-initiated change (source=1), should NOT forward
+        new = make_trv_state(
+            "trv_1",
+            occupied_heating_setpoint=22.0,
+            setpoint_change_source=1,
+        )
+        mock_backend.fire_state_update("trv_1", new)
+        await hass.async_block_till_done()
+
+        mock_backend.async_send_setpoint_command.assert_not_called()
+        await coord.async_teardown()
+
+    async def test_set_room_temperature(self, hass, mock_backend, subentry_data):
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        await coord.async_setup()
+
+        await coord.async_set_room_temperature(23.0)
+
+        assert mock_backend.async_set_occupied_heating_setpoint.call_count == 2
+        calls = mock_backend.async_set_occupied_heating_setpoint.call_args_list
+        assert calls[0][0] == ("trv_1", 23.0)
+        assert calls[1][0] == ("trv_2", 23.0)
+        assert coord.state.target_temperature == 23.0
         await coord.async_teardown()
 
 

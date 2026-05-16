@@ -5,6 +5,7 @@ Implements per-room coordination logic:
 - Room state computation (temperature, demand, window, availability)
 """
 
+import asyncio
 import logging
 import time
 from collections.abc import Callable
@@ -39,6 +40,8 @@ from custom_components.danfoss_ally_gateway.const import (
     EXTERNAL_TEMP_DISABLED,
     HEAT_SOURCE_BINARY_SENSOR,
     HEAT_SOURCE_CLIMATE,
+    SETPOINT_SOURCE_MANUAL,
+    SETPOINT_TYPE_USER,
     TRV_AVAILABILITY_TIMEOUT,
     WINDOW_OPEN_DETECTED,
 )
@@ -120,6 +123,10 @@ class RoomCoordinator:
         self._ext_temp_trv: dict[str, ExtTempTRVState] = {
             trv_id: ExtTempTRVState() for trv_id in self._trv_ids
         }
+
+        # Setpoint coordination
+        self._setpoint_lock = asyncio.Lock()
+        self._programmatic_setpoint: bool = False
 
     @property
     def room_name(self) -> str:
@@ -239,7 +246,7 @@ class RoomCoordinator:
                     await self._backend.async_set_external_temperature(
                         trv_id, EXTERNAL_TEMP_DISABLED / 100
                     )
-                except Exception:  # noqa: BLE001
+                except Exception:
                     _LOGGER.debug(
                         "Failed to disable ext temp on %s during teardown", trv_id
                     )
@@ -252,6 +259,7 @@ class RoomCoordinator:
         if trv_id not in self._trv_ids:
             return  # Not one of our TRVs
 
+        old_state = self.state.trv_states.get(trv_id)
         self.state.trv_states[trv_id] = trv_state
 
         # Track last update time for availability
@@ -263,6 +271,12 @@ class RoomCoordinator:
         # Update per-TRV radiator_covered from TRV-reported state
         if trv_state.radiator_covered is not None:
             self._ext_temp_trv[trv_id].covered = trv_state.radiator_covered
+
+        # Check for setpoint coordination (manual dial change)
+        if old_state is not None:
+            self.hass.async_create_task(
+                self._async_check_setpoint_coordination(trv_id, old_state, trv_state)
+            )
 
         self._notify_state_update()
 
@@ -403,7 +417,7 @@ class RoomCoordinator:
 
         try:
             await self._backend.async_set_external_temperature(trv_id, temperature)
-        except Exception:  # noqa: BLE001
+        except Exception:
             _LOGGER.exception(
                 "Failed to send ext temp to TRV %s in room '%s'",
                 trv_id,
@@ -508,7 +522,7 @@ class RoomCoordinator:
         for trv_id in self._trv_ids:
             try:
                 await self._backend.async_set_heat_available(trv_id, heat_available)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 _LOGGER.exception(
                     "Failed to set heat_available on TRV %s in room '%s'",
                     trv_id,
@@ -517,9 +531,81 @@ class RoomCoordinator:
 
         self._notify_state_update()
 
-    # ── Setpoint control ──────────────────────────────────────────────
+    # ── Setpoint Coordination ──────────────────────────────────────────
+
+    async def _async_check_setpoint_coordination(
+        self, trv_id: str, old_state: TRVState, new_state: TRVState
+    ) -> None:
+        """Check if a TRV's setpoint changed due to manual dial turn.
+
+        Per Danfoss spec: When setpoint_change_source == 0x00 (manual),
+        forward the new setpoint to other room TRVs as Type 1 (aggressive).
+        """
+        if self._programmatic_setpoint:
+            return  # We're the ones writing, ignore echo
+
+        new_setpoint = new_state.occupied_heating_setpoint
+        old_setpoint = old_state.occupied_heating_setpoint
+
+        if new_setpoint is None or new_setpoint == old_setpoint:
+            return  # No change
+
+        # Check if the change was manual
+        if new_state.setpoint_change_source != SETPOINT_SOURCE_MANUAL:
+            return
+
+        _LOGGER.info(
+            "Manual setpoint change on %s in room '%s': %.1f → %.1f°C",
+            trv_id,
+            self._room_name,
+            old_setpoint or 0,
+            new_setpoint,
+        )
+
+        # Forward to other TRVs as Type 1 (user interaction / aggressive)
+        if len(self._trv_ids) > 1:
+            async with self._setpoint_lock:
+                self._programmatic_setpoint = True
+                try:
+                    for other_trv in self._trv_ids:
+                        if other_trv == trv_id:
+                            continue
+                        try:
+                            await self._backend.async_send_setpoint_command(
+                                other_trv, new_setpoint, SETPOINT_TYPE_USER
+                            )
+                        except Exception:
+                            _LOGGER.exception(
+                                "Failed to forward setpoint to TRV %s", other_trv
+                            )
+                finally:
+                    self._programmatic_setpoint = False
+
+        # Update room state
+        self.state.target_temperature = new_setpoint
+        self._notify_state_update()
 
     async def async_set_room_temperature(self, temperature: float) -> None:
-        """Set the target temperature for all TRVs in the room."""
-        for trv_id in self._trv_ids:
-            await self._backend.async_set_occupied_heating_setpoint(trv_id, temperature)
+        """Set target temperature for the entire room (from climate entity).
+
+        Uses OccupiedHeatingSetpoint write (Type 0 / gentle motor).
+        """
+        _LOGGER.debug(
+            "Setting room '%s' temperature to %.1f°C", self._room_name, temperature
+        )
+
+        async with self._setpoint_lock:
+            self._programmatic_setpoint = True
+            try:
+                for trv_id in self._trv_ids:
+                    try:
+                        await self._backend.async_set_occupied_heating_setpoint(
+                            trv_id, temperature
+                        )
+                    except Exception:
+                        _LOGGER.exception("Failed to set setpoint on TRV %s", trv_id)
+            finally:
+                self._programmatic_setpoint = False
+
+        self.state.target_temperature = temperature
+        self._notify_state_update()

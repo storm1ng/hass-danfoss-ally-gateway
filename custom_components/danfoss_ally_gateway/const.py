@@ -53,6 +53,9 @@ EXT_TEMP_CHANGE_THRESHOLD: Final = 0.1  # Kelvin / degrees C
 # ── Setpoint command types ─────────────────────────────────────────────
 SETPOINT_TYPE_USER: Final = 1  # Aggressive motor response (manual dial change)
 
+# ── Setpoint change sources (from TRV reports) ────────────────────────
+SETPOINT_SOURCE_MANUAL: Final = 0x00
+
 # ── Supported TRV device filters ───────────────────────────────────────
 SUPPORTED_TRV_DEVICES_Z2M: Final = [
     {"manufacturer": "Danfoss", "model": "Ally thermostat"},
