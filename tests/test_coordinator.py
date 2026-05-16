@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from conftest import make_subentry_data, make_trv_state
 from homeassistant import config_entries
+from homeassistant.const import STATE_UNAVAILABLE
 from homeassistant.helpers import device_registry as dr
 
 from custom_components.danfoss_ally_gateway.backend.z2m import Z2MBackend
@@ -170,6 +171,149 @@ class TestTRVStateHandling:
         await hass.async_block_till_done()
 
         assert len(callback_states) == 0
+        await coord.async_teardown()
+
+
+# ── External Temperature ──────────────────────────────────────────────
+
+
+class TestExternalTemperature:
+    """Tests for external temperature forwarding."""
+
+    async def test_sends_initial_ext_temp(self, hass, mock_backend):
+        """External temp is sent on setup when sensor has a valid state."""
+        hass.states.async_set("sensor.temp", "21.5")
+        data = make_subentry_data(temp_sensor="sensor.temp")
+        coord = RoomCoordinator(hass, mock_backend, data)
+        await coord.async_setup()
+
+        assert mock_backend.async_set_external_temperature.call_count == 2
+        call_args = mock_backend.async_set_external_temperature.call_args_list
+        assert call_args[0][0] == ("trv_1", 21.5)
+        assert call_args[1][0] == ("trv_2", 21.5)
+        await coord.async_teardown()
+
+    async def test_skips_unavailable_sensor(self, hass, mock_backend):
+        hass.states.async_set("sensor.temp", STATE_UNAVAILABLE)
+        data = make_subentry_data(temp_sensor="sensor.temp")
+        coord = RoomCoordinator(hass, mock_backend, data)
+        await coord.async_setup()
+
+        assert mock_backend.async_set_external_temperature.call_count == 0
+        await coord.async_teardown()
+
+    async def test_no_sensor_configured(self, hass, mock_backend, subentry_data):
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        await coord.async_setup()
+
+        assert mock_backend.async_set_external_temperature.call_count == 0
+        await coord.async_teardown()
+
+    async def test_teardown_disables_ext_temp(self, hass, mock_backend):
+        hass.states.async_set("sensor.temp", "21.5")
+        data = make_subentry_data(temp_sensor="sensor.temp")
+        coord = RoomCoordinator(hass, mock_backend, data)
+        await coord.async_setup()
+        mock_backend.async_set_external_temperature.reset_mock()
+
+        await coord.async_teardown()
+
+        assert mock_backend.async_set_external_temperature.call_count == 2
+        for call in mock_backend.async_set_external_temperature.call_args_list:
+            assert call[0][1] == -80.0  # EXTERNAL_TEMP_DISABLED / 100
+
+    async def test_ext_temp_uses_trv_covered_state(self, hass, mock_backend):
+        """radiator_covered from TRV state updates per-TRV ext temp tracking."""
+        hass.states.async_set("sensor.temp", "21.5")
+        data = make_subentry_data(temp_sensor="sensor.temp")
+        coord = RoomCoordinator(hass, mock_backend, data)
+        await coord.async_setup()
+
+        assert coord._ext_temp_trv["trv_1"].covered is False
+        assert coord._ext_temp_trv["trv_2"].covered is False
+
+        mock_backend.fire_state_update(
+            "trv_1", make_trv_state("trv_1", radiator_covered=True)
+        )
+        assert coord._ext_temp_trv["trv_1"].covered is True
+        assert coord._ext_temp_trv["trv_2"].covered is False
+
+        await coord.async_teardown()
+
+    async def test_ext_temp_mixed_room_tracking(self, hass, mock_backend):
+        """Mixed covered/exposed room: each TRV tracks independently."""
+        hass.states.async_set("sensor.temp", "21.5")
+        data = make_subentry_data(temp_sensor="sensor.temp")
+        coord = RoomCoordinator(hass, mock_backend, data)
+        await coord.async_setup()
+
+        mock_backend.fire_state_update(
+            "trv_1", make_trv_state("trv_1", radiator_covered=True)
+        )
+        mock_backend.fire_state_update(
+            "trv_2", make_trv_state("trv_2", radiator_covered=False)
+        )
+
+        assert coord._ext_temp_trv["trv_1"].last_temp_sent == 21.5
+        assert coord._ext_temp_trv["trv_2"].last_temp_sent == 21.5
+        assert coord._ext_temp_trv["trv_1"].covered is True
+        assert coord._ext_temp_trv["trv_2"].covered is False
+
+        await coord.async_teardown()
+
+    async def test_ext_temp_per_trv_initial_send_sets_tracking(
+        self, hass, mock_backend
+    ):
+        """Initial send populates per-TRV tracking for all TRVs."""
+        hass.states.async_set("sensor.temp", "20.0")
+        data = make_subentry_data(temp_sensor="sensor.temp")
+        coord = RoomCoordinator(hass, mock_backend, data)
+        await coord.async_setup()
+
+        for trv_id in ["trv_1", "trv_2"]:
+            ext_state = coord._ext_temp_trv[trv_id]
+            assert ext_state.last_temp_sent == 20.0
+            assert ext_state.last_send_time > 0.0
+            assert ext_state.timer is not None
+
+        await coord.async_teardown()
+
+    async def test_ext_temp_teardown_cancels_all_per_trv_timers(
+        self, hass, mock_backend
+    ):
+        """Teardown cancels all per-TRV timers."""
+        hass.states.async_set("sensor.temp", "20.0")
+        data = make_subentry_data(temp_sensor="sensor.temp")
+        coord = RoomCoordinator(hass, mock_backend, data)
+        await coord.async_setup()
+
+        for ext_state in coord._ext_temp_trv.values():
+            assert ext_state.timer is not None
+
+        await coord.async_teardown()
+
+        for ext_state in coord._ext_temp_trv.values():
+            assert ext_state.timer is None
+
+    async def test_ext_temp_covered_change_at_runtime(self, hass, mock_backend):
+        """TRV changing radiator_covered at runtime updates tracking."""
+        hass.states.async_set("sensor.temp", "21.5")
+        data = make_subentry_data(temp_sensor="sensor.temp")
+        coord = RoomCoordinator(hass, mock_backend, data)
+        await coord.async_setup()
+
+        assert coord._ext_temp_trv["trv_1"].covered is False
+
+        mock_backend.fire_state_update(
+            "trv_1", make_trv_state("trv_1", radiator_covered=True)
+        )
+        assert coord._ext_temp_trv["trv_1"].covered is True
+
+        mock_backend.fire_state_update(
+            "trv_1", make_trv_state("trv_1", radiator_covered=False)
+        )
+        assert coord._ext_temp_trv["trv_1"].covered is False
+
         await coord.async_teardown()
 
 
