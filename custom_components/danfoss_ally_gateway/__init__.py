@@ -9,14 +9,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from homeassistant.config_entries import ConfigEntry
-
-try:
-    from homeassistant.config_entries import ConfigSubEntry
-except ImportError:
-    # ConfigSubEntry was added in HA 2025.2+
-    ConfigSubEntry = Any  # type: ignore[assignment,misc]
-
+from homeassistant.config_entries import ConfigEntry, ConfigSubentry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 
@@ -121,7 +114,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def async_setup_subentry(
-    hass: HomeAssistant, entry: ConfigEntry, subentry: ConfigSubEntry
+    hass: HomeAssistant, entry: ConfigEntry, subentry: ConfigSubentry
 ) -> bool:
     """Set up a room subentry."""
     if subentry.subentry_type != SUBENTRY_ROOM:
@@ -148,7 +141,7 @@ async def async_setup_subentry(
 
 
 async def async_unload_subentry(
-    hass: HomeAssistant, entry: ConfigEntry, subentry: ConfigSubEntry
+    hass: HomeAssistant, entry: ConfigEntry, subentry: ConfigSubentry
 ) -> bool:
     """Unload a room subentry."""
     if subentry.subentry_type != SUBENTRY_ROOM:
