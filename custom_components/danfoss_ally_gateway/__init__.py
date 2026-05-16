@@ -132,6 +132,23 @@ async def async_setup_subentry(
     entry_data["coordinators"][subentry.subentry_id] = coordinator
     await coordinator.async_setup()
 
+    # Add entities for the new coordinator using stored platform callbacks
+    platform_callbacks: dict = entry_data.get("platform_add_entities", {})
+
+    from .binary_sensor import create_room_entities as create_binary_sensor_entities
+    from .climate import create_room_entities as create_climate_entities
+
+    creators = {
+        "climate": create_climate_entities,
+        "binary_sensor": create_binary_sensor_entities,
+    }
+
+    for platform, creator in creators.items():
+        add_entities = platform_callbacks.get(platform)
+        if add_entities is not None:
+            entities = creator(coordinator, entry.entry_id, subentry.subentry_id)
+            add_entities(entities, config_subentry_id=subentry.subentry_id)
+
     # Assign area to the room's virtual device
     area_id = subentry.data.get(CONF_AREA, "")
     if area_id:
