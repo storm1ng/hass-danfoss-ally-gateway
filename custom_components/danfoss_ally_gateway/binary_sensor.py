@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 
 from homeassistant.components.binary_sensor import (
+    BinarySensorDeviceClass,
     BinarySensorEntity,
 )
 from homeassistant.config_entries import ConfigEntry
@@ -51,6 +52,7 @@ def create_room_entities(
     return [
         DanfossAllyHeatRequired(coordinator, config_entry_id, subentry_id),
         DanfossAllyHeatAvailable(coordinator, config_entry_id, subentry_id),
+        DanfossAllyWindowOpen(coordinator, config_entry_id, subentry_id),
     ]
 
 
@@ -142,3 +144,24 @@ class DanfossAllyHeatAvailable(_DanfossAllyBinarySensorBase):
     def is_on(self) -> bool | None:
         """Return True if heat is available."""
         return self._coordinator.state.heat_available
+
+
+class DanfossAllyWindowOpen(_DanfossAllyBinarySensorBase):
+    """Binary sensor: window open detected in the room."""
+
+    _attr_device_class = BinarySensorDeviceClass.WINDOW
+
+    def __init__(
+        self,
+        coordinator: RoomCoordinator,
+        config_entry_id: str,
+        subentry_id: str,
+    ) -> None:
+        """Initialize window open sensor."""
+        super().__init__(coordinator, config_entry_id, subentry_id, "window_open")
+        self._attr_name = f"{coordinator.room_name} Window Open"
+
+    @property
+    def is_on(self) -> bool:
+        """Return True if any TRV detects window open."""
+        return self._coordinator.state.window_open

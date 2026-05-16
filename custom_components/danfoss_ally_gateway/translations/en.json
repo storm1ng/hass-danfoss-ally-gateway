@@ -84,5 +84,26 @@
             },
             "abort": {}
         }
+    },
+    "entity": {
+        "binary_sensor": {
+            "heat_required": {
+                "name": "{room_name} Heat Required",
+                "state": {
+                    "on": "Required",
+                    "off": "Not required"
+                }
+            },
+            "heat_available": {
+                "name": "{room_name} Heat Available",
+                "state": {
+                    "on": "Available",
+                    "off": "Unavailable"
+                }
+            },
+            "window_open": {
+                "name": "{room_name} Window Open"
+            }
+        }
     }
 }

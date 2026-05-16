@@ -1,8 +1,13 @@
 """Tests for binary sensor entities."""
 
+from __future__ import annotations
+
+from homeassistant.components.binary_sensor import BinarySensorDeviceClass
+
 from custom_components.danfoss_ally_gateway.binary_sensor import (
     DanfossAllyHeatAvailable,
     DanfossAllyHeatRequired,
+    DanfossAllyWindowOpen,
     create_room_entities,
 )
 from custom_components.danfoss_ally_gateway.const import DOMAIN
@@ -24,26 +29,29 @@ def _make_entities(hass, mock_backend, subentry_data):
 class TestBinarySensorCreation:
     """Tests for binary sensor entity creation."""
 
-    def test_create_room_entities_returns_two(self, hass, mock_backend, subentry_data):
-        """Two binary sensors are created per room."""
+    def test_create_room_entities_returns_three(
+        self, hass, mock_backend, subentry_data
+    ):
+        """Three binary sensors are created per room."""
         _, entities = _make_entities(hass, mock_backend, subentry_data)
-        assert len(entities) == 2
+        assert len(entities) == 3
 
     def test_entity_types(self, hass, mock_backend, subentry_data):
-        """Check both entity types are present."""
+        """Check all three entity types are present."""
         _, entities = _make_entities(hass, mock_backend, subentry_data)
         types = {type(e) for e in entities}
         assert types == {
             DanfossAllyHeatRequired,
             DanfossAllyHeatAvailable,
+            DanfossAllyWindowOpen,
         }
 
     def test_unique_ids(self, hass, mock_backend, subentry_data):
         """Each entity has a distinct unique_id."""
         _, entities = _make_entities(hass, mock_backend, subentry_data)
         uids = {e.unique_id for e in entities}
-        assert len(uids) == 2
-        expected_suffixes = {"heat_required", "heat_available"}
+        assert len(uids) == 3
+        expected_suffixes = {"heat_required", "heat_available", "window_open"}
         for suffix in expected_suffixes:
             assert f"{DOMAIN}_entry1_sub1_{suffix}" in uids
 
@@ -53,6 +61,7 @@ class TestBinarySensorCreation:
         names = {e.name for e in entities}
         assert "Living Room Heat Required" in names
         assert "Living Room Heat Available" in names
+        assert "Living Room Window Open" in names
 
 
 # ── Device Info ───────────────────────────────────────────────────────
@@ -112,6 +121,11 @@ class TestBinarySensorDeviceClasses:
         )
         assert heat_avail.translation_key == "heat_available"
 
+    def test_window_open_device_class(self, hass, mock_backend, subentry_data):
+        _, entities = _make_entities(hass, mock_backend, subentry_data)
+        win_open = next(e for e in entities if isinstance(e, DanfossAllyWindowOpen))
+        assert win_open.device_class == BinarySensorDeviceClass.WINDOW
+
 
 # ── State ─────────────────────────────────────────────────────────────
 
@@ -152,6 +166,17 @@ class TestBinarySensorState:
             e for e in entities if isinstance(e, DanfossAllyHeatAvailable)
         )
         assert heat_avail.is_on is False
+
+    def test_window_open_off_by_default(self, hass, mock_backend, subentry_data):
+        coord, entities = _make_entities(hass, mock_backend, subentry_data)
+        win_open = next(e for e in entities if isinstance(e, DanfossAllyWindowOpen))
+        assert win_open.is_on is False
+
+    def test_window_open_on(self, hass, mock_backend, subentry_data):
+        coord, entities = _make_entities(hass, mock_backend, subentry_data)
+        coord.state.window_open = True
+        win_open = next(e for e in entities if isinstance(e, DanfossAllyWindowOpen))
+        assert win_open.is_on is True
 
 
 # ── Availability ──────────────────────────────────────────────────────
