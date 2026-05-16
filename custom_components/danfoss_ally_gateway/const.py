@@ -20,6 +20,11 @@ CONF_ROOM_NAME: Final = "room_name"
 CONF_AREA: Final = "area"
 CONF_TRV_ENTITIES: Final = "trv_entities"
 CONF_TEMP_SENSOR: Final = "temperature_sensor"
+CONF_HEAT_SOURCE: Final = "heat_source"
+CONF_HEAT_SOURCE_TYPE: Final = "heat_source_type"
+
+HEAT_SOURCE_CLIMATE: Final = "climate"
+HEAT_SOURCE_BINARY_SENSOR: Final = "binary_sensor"
 
 # ── Subentry types ─────────────────────────────────────────────────────
 SUBENTRY_ROOM: Final = "room"

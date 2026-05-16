@@ -11,6 +11,8 @@ from custom_components.danfoss_ally_gateway.backend import DanfossBackend, TRVSt
 from custom_components.danfoss_ally_gateway.const import (
     BACKEND_Z2M,
     CONF_BACKEND,
+    CONF_HEAT_SOURCE,
+    CONF_HEAT_SOURCE_TYPE,
     CONF_MQTT_BASE_TOPIC,
     CONF_ROOM_NAME,
     CONF_TEMP_SENSOR,
@@ -133,12 +135,16 @@ def make_subentry_data(
     room_name: str = "Living Room",
     trv_ids: list[str] | None = None,
     temp_sensor: str = "",
+    heat_source: str = "",
+    heat_source_type: str = "",
 ) -> dict[str, Any]:
     """Build a subentry data dict for creating a RoomCoordinator."""
     return {
         CONF_ROOM_NAME: room_name,
         CONF_TRV_ENTITIES: trv_ids or ["trv_1", "trv_2"],
         CONF_TEMP_SENSOR: temp_sensor,
+        CONF_HEAT_SOURCE: heat_source,
+        CONF_HEAT_SOURCE_TYPE: heat_source_type,
     }
 
 

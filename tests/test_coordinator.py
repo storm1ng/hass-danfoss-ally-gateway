@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+from types import MappingProxyType
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from conftest import make_subentry_data, make_trv_state
 from homeassistant import config_entries
-from homeassistant.const import STATE_UNAVAILABLE
+from homeassistant.const import STATE_ON, STATE_UNAVAILABLE
 from homeassistant.helpers import device_registry as dr
 
 from custom_components.danfoss_ally_gateway.backend.z2m import Z2MBackend
@@ -317,6 +318,56 @@ class TestExternalTemperature:
         await coord.async_teardown()
 
 
+# ── Heat Availability ─────────────────────────────────────────────────
+
+
+class TestHeatAvailability:
+    """Tests for heat availability signaling."""
+
+    async def test_climate_heat_source(self, hass, mock_backend):
+        hass.states.async_set("climate.boiler", "heat", {"hvac_action": "heating"})
+        data = make_subentry_data(
+            heat_source="climate.boiler",
+            heat_source_type="climate",
+        )
+        coord = RoomCoordinator(hass, mock_backend, data)
+        await coord.async_setup()
+
+        assert mock_backend.async_set_heat_available.call_count == 2
+        for call in mock_backend.async_set_heat_available.call_args_list:
+            assert call[0][1] is True
+        assert coord.state.heat_available is True
+        await coord.async_teardown()
+
+    async def test_binary_sensor_heat_source(self, hass, mock_backend):
+        hass.states.async_set("binary_sensor.boiler", STATE_ON)
+        data = make_subentry_data(
+            heat_source="binary_sensor.boiler",
+            heat_source_type="binary_sensor",
+        )
+        coord = RoomCoordinator(hass, mock_backend, data)
+        await coord.async_setup()
+
+        assert mock_backend.async_set_heat_available.call_count == 2
+        for call in mock_backend.async_set_heat_available.call_args_list:
+            assert call[0][1] is True
+        await coord.async_teardown()
+
+    async def test_climate_idle_means_no_heat(self, hass, mock_backend):
+        hass.states.async_set("climate.boiler", "heat", {"hvac_action": "idle"})
+        data = make_subentry_data(
+            heat_source="climate.boiler",
+            heat_source_type="climate",
+        )
+        coord = RoomCoordinator(hass, mock_backend, data)
+        await coord.async_setup()
+
+        assert mock_backend.async_set_heat_available.call_count == 2
+        for call in mock_backend.async_set_heat_available.call_args_list:
+            assert call[0][1] is False
+        await coord.async_teardown()
+
+
 # ── Device ID Resolution ──────────────────────────────────────────────
 
 
@@ -328,7 +379,7 @@ class TestDeviceIdResolution:
         """Create a mock config entry for device registration."""
         entry = config_entries.ConfigEntry(
             data={},
-            discovery_keys={},
+            discovery_keys=MappingProxyType({}),
             domain="mqtt",
             minor_version=1,
             options={},

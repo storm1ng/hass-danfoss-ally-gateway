@@ -24,11 +24,15 @@ from .const import (
     BACKEND_ZHA,
     CONF_AREA,
     CONF_BACKEND,
+    CONF_HEAT_SOURCE,
+    CONF_HEAT_SOURCE_TYPE,
     CONF_MQTT_BASE_TOPIC,
     CONF_ROOM_NAME,
     CONF_TEMP_SENSOR,
     CONF_TRV_ENTITIES,
     DOMAIN,
+    HEAT_SOURCE_BINARY_SENSOR,
+    HEAT_SOURCE_CLIMATE,
     SUBENTRY_ROOM,
     SUPPORTED_TRV_DEVICES_Z2M,
     SUPPORTED_TRV_DEVICES_ZHA,
@@ -37,6 +41,13 @@ from .const import (
 BACKEND_OPTIONS = [
     selector.SelectOptionDict(value=BACKEND_Z2M, label="Zigbee2MQTT"),
     selector.SelectOptionDict(value=BACKEND_ZHA, label="ZHA"),
+]
+
+HEAT_SOURCE_TYPE_OPTIONS = [
+    selector.SelectOptionDict(value=HEAT_SOURCE_CLIMATE, label="Climate entity"),
+    selector.SelectOptionDict(
+        value=HEAT_SOURCE_BINARY_SENSOR, label="Binary sensor entity"
+    ),
 ]
 
 
@@ -235,6 +246,10 @@ class RoomSubentryFlowHandler(ConfigSubentryFlow):
                         CONF_AREA: user_input.get(CONF_AREA, ""),
                         CONF_TRV_ENTITIES: trv_entities,
                         CONF_TEMP_SENSOR: user_input.get(CONF_TEMP_SENSOR, ""),
+                        CONF_HEAT_SOURCE: user_input.get(CONF_HEAT_SOURCE, ""),
+                        CONF_HEAT_SOURCE_TYPE: user_input.get(
+                            CONF_HEAT_SOURCE_TYPE, ""
+                        ),
                     },
                 )
 
@@ -254,6 +269,17 @@ class RoomSubentryFlowHandler(ConfigSubentryFlow):
                         selector.EntitySelectorConfig(
                             domain="sensor",
                             device_class=SensorDeviceClass.TEMPERATURE,
+                        )
+                    ),
+                    vol.Optional(CONF_HEAT_SOURCE_TYPE): selector.SelectSelector(
+                        selector.SelectSelectorConfig(
+                            options=HEAT_SOURCE_TYPE_OPTIONS,
+                            mode=selector.SelectSelectorMode.DROPDOWN,
+                        ),
+                    ),
+                    vol.Optional(CONF_HEAT_SOURCE): selector.EntitySelector(
+                        selector.EntitySelectorConfig(
+                            domain=["climate", "binary_sensor"],
                         )
                     ),
                 }
@@ -287,6 +313,10 @@ class RoomSubentryFlowHandler(ConfigSubentryFlow):
                         CONF_AREA: user_input.get(CONF_AREA, ""),
                         CONF_TRV_ENTITIES: trv_entities,
                         CONF_TEMP_SENSOR: user_input.get(CONF_TEMP_SENSOR, ""),
+                        CONF_HEAT_SOURCE: user_input.get(CONF_HEAT_SOURCE, ""),
+                        CONF_HEAT_SOURCE_TYPE: user_input.get(
+                            CONF_HEAT_SOURCE_TYPE, ""
+                        ),
                     },
                 )
 
@@ -318,6 +348,27 @@ class RoomSubentryFlowHandler(ConfigSubentryFlow):
                         selector.EntitySelectorConfig(
                             domain="sensor",
                             device_class=SensorDeviceClass.TEMPERATURE,
+                        )
+                    ),
+                    vol.Optional(
+                        CONF_HEAT_SOURCE_TYPE,
+                        description={
+                            "suggested_value": existing.get(CONF_HEAT_SOURCE_TYPE, "")
+                        },
+                    ): selector.SelectSelector(
+                        selector.SelectSelectorConfig(
+                            options=HEAT_SOURCE_TYPE_OPTIONS,
+                            mode=selector.SelectSelectorMode.DROPDOWN,
+                        ),
+                    ),
+                    vol.Optional(
+                        CONF_HEAT_SOURCE,
+                        description={
+                            "suggested_value": existing.get(CONF_HEAT_SOURCE, "")
+                        },
+                    ): selector.EntitySelector(
+                        selector.EntitySelectorConfig(
+                            domain=["climate", "binary_sensor"],
                         )
                     ),
                 }

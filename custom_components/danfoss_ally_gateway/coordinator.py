@@ -11,7 +11,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
+from homeassistant.const import STATE_ON, STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import (
     CALLBACK_TYPE,
     Event,
@@ -26,6 +26,8 @@ from homeassistant.helpers.event import (
 )
 
 from custom_components.danfoss_ally_gateway.const import (
+    CONF_HEAT_SOURCE,
+    CONF_HEAT_SOURCE_TYPE,
     CONF_ROOM_NAME,
     CONF_TEMP_SENSOR,
     CONF_TRV_ENTITIES,
@@ -35,6 +37,8 @@ from custom_components.danfoss_ally_gateway.const import (
     EXT_TEMP_EXPOSED_MAX_INTERVAL,
     EXT_TEMP_EXPOSED_MIN_INTERVAL,
     EXTERNAL_TEMP_DISABLED,
+    HEAT_SOURCE_BINARY_SENSOR,
+    HEAT_SOURCE_CLIMATE,
     TRV_AVAILABILITY_TIMEOUT,
     WINDOW_OPEN_DETECTED,
 )
@@ -97,6 +101,8 @@ class RoomCoordinator:
         self._room_name: str = subentry_data[CONF_ROOM_NAME]
         self._trv_ids: list[str] = subentry_data[CONF_TRV_ENTITIES]
         self._temp_sensor_id: str = subentry_data.get(CONF_TEMP_SENSOR, "")
+        self._heat_source_id: str = subentry_data.get(CONF_HEAT_SOURCE, "")
+        self._heat_source_type: str = subentry_data.get(CONF_HEAT_SOURCE_TYPE, "")
 
         # Current room state
         self.state = RoomState(room_name=self._room_name)
@@ -198,6 +204,14 @@ class RoomCoordinator:
             )
             self._unsub_callbacks.append(unsub)
             await self._async_send_initial_ext_temp()
+
+        # Listen to heat source entity
+        if self._heat_source_id:
+            unsub = async_track_state_change_event(
+                self.hass, [self._heat_source_id], self._handle_heat_source_change
+            )
+            self._unsub_callbacks.append(unsub)
+            await self._async_update_heat_availability()
 
     async def async_teardown(self) -> None:
         """Tear down the room coordinator."""
@@ -449,6 +463,59 @@ class RoomCoordinator:
             )
 
         ext_state.timer = async_call_later(self.hass, max_interval, _resend)
+
+    # ── Heat Availability ──────────────────────────────────────────────
+
+    @callback
+    def _handle_heat_source_change(self, event: Event[EventStateChangedData]) -> None:
+        """Handle heat source entity state change."""
+        self.hass.async_create_task(self._async_update_heat_availability())
+
+    async def _async_update_heat_availability(self) -> None:
+        """Read heat source entity and write heat_available to TRVs."""
+        if not self._heat_source_id:
+            return
+
+        entity_state = self.hass.states.get(self._heat_source_id)
+        if entity_state is None or entity_state.state in (
+            STATE_UNAVAILABLE,
+            STATE_UNKNOWN,
+        ):
+            return
+
+        heat_available: bool
+
+        if self._heat_source_type == HEAT_SOURCE_CLIMATE:
+            hvac_action = entity_state.attributes.get("hvac_action", "")
+            heat_available = hvac_action == "heating"
+        elif self._heat_source_type == HEAT_SOURCE_BINARY_SENSOR:
+            heat_available = entity_state.state == STATE_ON
+        else:
+            if entity_state.domain == "climate":
+                hvac_action = entity_state.attributes.get("hvac_action", "")
+                heat_available = hvac_action == "heating"
+            else:
+                heat_available = entity_state.state == STATE_ON
+
+        if self.state.heat_available == heat_available:
+            return
+
+        self.state.heat_available = heat_available
+        _LOGGER.debug(
+            "Heat available for room '%s': %s", self._room_name, heat_available
+        )
+
+        for trv_id in self._trv_ids:
+            try:
+                await self._backend.async_set_heat_available(trv_id, heat_available)
+            except Exception:  # noqa: BLE001
+                _LOGGER.exception(
+                    "Failed to set heat_available on TRV %s in room '%s'",
+                    trv_id,
+                    self._room_name,
+                )
+
+        self._notify_state_update()
 
     # ── Setpoint control ──────────────────────────────────────────────
 
