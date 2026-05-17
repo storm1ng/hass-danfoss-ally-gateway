@@ -105,5 +105,13 @@
                 "name": "{room_name} Window Open"
             }
         }
+    },
+    "sensor": {
+        "load_estimate": {
+            "name": "{trv_name} Load Estimate"
+        },
+        "load_room_mean": {
+            "name": "{room_name} Load Room Mean"
+        }
     }
 }

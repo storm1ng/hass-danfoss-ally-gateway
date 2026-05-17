@@ -11,6 +11,7 @@ from custom_components.danfoss_ally_gateway.coordinator import RoomCoordinator
 from custom_components.danfoss_ally_gateway.sensor import (
     DanfossAllyHeatingDemand,
     DanfossAllyLoadEstimate,
+    DanfossAllyLoadRoomMean,
     create_room_entities,
 )
 
@@ -39,24 +40,39 @@ class TestSensorCreation:
     """Tests for sensor entity creation."""
 
     def test_create_multi_trv_room(self, hass, mock_backend, subentry_data):
-        """Multi-TRV room: 2 heating demand + 2 load estimate = 4."""
+        """Multi-TRV room: 2 heating demand + 2 load est + 1 load room mean = 5."""
         _, entities = _make_entities(hass, mock_backend, subentry_data)
-        assert len(entities) == 4
+        assert len(entities) == 5
 
     def test_create_single_trv_room(self, hass, mock_backend):
-        """Single-TRV room: 1 heating demand + 1 load estimate = 2."""
+        """Single-TRV room: 1 heating demand + 1 load est + NO room mean = 2."""
         _, entities = _make_single_trv_entities(hass, mock_backend)
         assert len(entities) == 2
 
-    def test_entity_types(self, hass, mock_backend, subentry_data):
-        """Both entity types are present."""
+    def test_no_load_room_mean_for_single_trv(self, hass, mock_backend):
+        """LoadRoomMean is only created for multi-TRV rooms."""
+        _, entities = _make_single_trv_entities(hass, mock_backend)
+        types = [type(e) for e in entities]
+        assert DanfossAllyLoadRoomMean not in types
+
+    def test_load_room_mean_present_for_multi_trv(
+        self, hass, mock_backend, subentry_data
+    ):
+        _, entities = _make_entities(hass, mock_backend, subentry_data)
+        types = [type(e) for e in entities]
+        assert DanfossAllyLoadRoomMean in types
+
+    def test_entity_types_multi_trv(self, hass, mock_backend, subentry_data):
+        """Multi-TRV creates the correct set of entity types."""
         _, entities = _make_entities(hass, mock_backend, subentry_data)
         heating_demand = [
             e for e in entities if isinstance(e, DanfossAllyHeatingDemand)
         ]
         load_est = [e for e in entities if isinstance(e, DanfossAllyLoadEstimate)]
+        load_mean = [e for e in entities if isinstance(e, DanfossAllyLoadRoomMean)]
         assert len(heating_demand) == 2
         assert len(load_est) == 2
+        assert len(load_mean) == 1
 
 
 # ── Unique IDs ────────────────────────────────────────────────────────
@@ -80,6 +96,11 @@ class TestSensorUniqueIds:
         uids = {e.unique_id for e in load_est}
         assert f"{DOMAIN}_entry1_sub1_trv_1_load_estimate" in uids
         assert f"{DOMAIN}_entry1_sub1_trv_2_load_estimate" in uids
+
+    def test_load_room_mean_unique_id(self, hass, mock_backend, subentry_data):
+        _, entities = _make_entities(hass, mock_backend, subentry_data)
+        load_mean = next(e for e in entities if isinstance(e, DanfossAllyLoadRoomMean))
+        assert load_mean.unique_id == f"{DOMAIN}_entry1_sub1_load_room_mean"
 
     def test_all_unique_ids_distinct(self, hass, mock_backend, subentry_data):
         _, entities = _make_entities(hass, mock_backend, subentry_data)
@@ -108,6 +129,11 @@ class TestSensorNames:
         names = {e.name for e in load_est}
         assert "trv_1 Load Estimate" in names
         assert "trv_2 Load Estimate" in names
+
+    def test_load_room_mean_name(self, hass, mock_backend, subentry_data):
+        _, entities = _make_entities(hass, mock_backend, subentry_data)
+        load_mean = next(e for e in entities if isinstance(e, DanfossAllyLoadRoomMean))
+        assert load_mean.name == "Living Room Load Room Mean"
 
 
 # ── Device Info ───────────────────────────────────────────────────────
@@ -160,6 +186,11 @@ class TestSensorAttributes:
         load_est = next(e for e in entities if isinstance(e, DanfossAllyLoadEstimate))
         assert load_est.state_class == SensorStateClass.MEASUREMENT
 
+    def test_load_room_mean_state_class(self, hass, mock_backend, subentry_data):
+        _, entities = _make_entities(hass, mock_backend, subentry_data)
+        load_mean = next(e for e in entities if isinstance(e, DanfossAllyLoadRoomMean))
+        assert load_mean.state_class == SensorStateClass.MEASUREMENT
+
 
 # ── State Values ──────────────────────────────────────────────────────
 
@@ -181,6 +212,7 @@ class TestSensorStateValues:
         coord, entities = _make_entities(hass, mock_backend, subentry_data)
         trv_state = make_trv_state(entity_id="trv_1", pi_heating_demand=75)
         coord.state.trv_states["trv_1"] = trv_state
+        # Find the heating demand entity for trv_1
         heating_demand = next(
             e
             for e in entities
@@ -205,6 +237,17 @@ class TestSensorStateValues:
             if isinstance(e, DanfossAllyLoadEstimate) and e._trv_id == "trv_1"
         )
         assert load_est.native_value == 200
+
+    def test_load_room_mean_none_by_default(self, hass, mock_backend, subentry_data):
+        coord, entities = _make_entities(hass, mock_backend, subentry_data)
+        load_mean = next(e for e in entities if isinstance(e, DanfossAllyLoadRoomMean))
+        assert load_mean.native_value is None
+
+    def test_load_room_mean_returns_value(self, hass, mock_backend, subentry_data):
+        coord, entities = _make_entities(hass, mock_backend, subentry_data)
+        coord.state.load_room_mean = 150
+        load_mean = next(e for e in entities if isinstance(e, DanfossAllyLoadRoomMean))
+        assert load_mean.native_value == 150
 
 
 # ── Availability ──────────────────────────────────────────────────────

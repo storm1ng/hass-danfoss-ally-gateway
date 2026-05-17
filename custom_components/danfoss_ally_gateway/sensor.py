@@ -2,6 +2,7 @@
 
 Provides:
 - Per-TRV: PI Heating Demand (%), Load Estimate
+- Per-room: Load Room Mean
 """
 
 from __future__ import annotations
@@ -64,6 +65,12 @@ def create_room_entities(
                     coordinator, config_entry_id, subentry_id, trv_id
                 ),
             ]
+        )
+
+    # Per-room sensors (only for multi-TRV rooms)
+    if len(coordinator.trv_ids) > 1:
+        entities.append(
+            DanfossAllyLoadRoomMean(coordinator, config_entry_id, subentry_id)
         )
 
     return entities
@@ -175,3 +182,28 @@ class DanfossAllyLoadEstimate(_DanfossAllySensorBase):
         if trv_state is None:
             return None
         return trv_state.load_estimate
+
+
+class DanfossAllyLoadRoomMean(_DanfossAllySensorBase):
+    """Sensor: calculated load room mean for the room."""
+
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:scale-balance"
+
+    def __init__(
+        self,
+        coordinator: RoomCoordinator,
+        config_entry_id: str,
+        subentry_id: str,
+    ) -> None:
+        """Initialize load room mean sensor."""
+        super().__init__(coordinator, config_entry_id, subentry_id)
+        self._attr_unique_id = (
+            f"{DOMAIN}_{config_entry_id}_{subentry_id}_load_room_mean"
+        )
+        self._attr_name = f"{coordinator.room_name} Load Room Mean"
+
+    @property
+    def native_value(self) -> int | None:
+        """Return the load room mean."""
+        return self._coordinator.state.load_room_mean
