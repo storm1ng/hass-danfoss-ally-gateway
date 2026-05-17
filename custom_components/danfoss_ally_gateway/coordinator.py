@@ -37,6 +37,7 @@ from .backend.z2m import Z2MBackend
 from .const import (
     CONF_HEAT_SOURCE,
     CONF_HEAT_SOURCE_TYPE,
+    CONF_REMOTE_CLIMATE,
     CONF_ROOM_NAME,
     CONF_TEMP_SENSOR,
     CONF_TRV_ENTITIES,
@@ -52,6 +53,7 @@ from .const import (
     LOAD_BALANCE_INTERVAL,
     LOAD_BALANCE_INVALID_THRESHOLD,
     LOAD_BALANCE_MAX_AGE,
+    REMOTE_CLIMATE_SUPPRESS_SECONDS,
     SETPOINT_SOURCE_MANUAL,
     SETPOINT_TYPE_USER,
     TRV_AVAILABILITY_TIMEOUT,
@@ -125,6 +127,7 @@ class RoomCoordinator:
         self._temp_sensor_id: str = subentry_data.get(CONF_TEMP_SENSOR, "")
         self._heat_source_id: str = subentry_data.get(CONF_HEAT_SOURCE, "")
         self._heat_source_type: str = subentry_data.get(CONF_HEAT_SOURCE_TYPE, "")
+        self._remote_climate_id: str = subentry_data.get(CONF_REMOTE_CLIMATE, "")
 
         # Current room state
         self.state = RoomState(room_name=self._room_name)
@@ -156,6 +159,9 @@ class RoomCoordinator:
 
         # Preheat coordination
         self._last_forwarded_preheat: dict[str, int] = {}  # trv_id → preheat_time
+
+        # Remote climate anti-echo
+        self._remote_setpoint_suppress_until: float = 0.0  # monotonic timestamp
 
     @property
     def room_name(self) -> str:
@@ -248,6 +254,15 @@ class RoomCoordinator:
             )
             self._unsub_callbacks.append(unsub)
             await self._async_update_heat_availability()
+
+        # Listen to remote climate entity for bidirectional setpoint sync
+        if self._remote_climate_id:
+            unsub = async_track_state_change_event(
+                self.hass,
+                [self._remote_climate_id],
+                self._handle_remote_climate_change,
+            )
+            self._unsub_callbacks.append(unsub)
 
         # Start load balancing timer (only for multi-TRV rooms)
         if len(self._trv_ids) > 1:
@@ -647,6 +662,9 @@ class RoomCoordinator:
         self.state.target_temperature = new_setpoint
         self._notify_state_update()
 
+        # Sync to remote climate if configured
+        await self._async_sync_remote_climate(new_setpoint)
+
     async def async_set_room_temperature(self, temperature: float) -> None:
         """Set target temperature for the entire room (from climate entity).
 
@@ -671,6 +689,129 @@ class RoomCoordinator:
 
         self.state.target_temperature = temperature
         self._notify_state_update()
+
+        # Sync to remote climate if configured
+        await self._async_sync_remote_climate(temperature)
+
+    # ── Remote Climate Sync ────────────────────────────────────────────
+
+    @callback
+    def _handle_remote_climate_change(self, event: Event) -> None:
+        """Handle remote climate entity state change for bidirectional sync.
+
+        When the remote climate's setpoint changes (by user or automation),
+        forward the new setpoint to all TRVs in the room.
+        """
+        # Anti-echo: ignore events within the suppression window
+        if time.monotonic() < self._remote_setpoint_suppress_until:
+            return
+
+        new_state = event.data.get("new_state")
+        if new_state is None or new_state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
+            return
+
+        # Extract setpoint from the remote climate entity
+        temperature = self._extract_remote_climate_setpoint(new_state)
+        if temperature is None:
+            return
+
+        # Only act if the temperature differs from the current room setpoint
+        if (
+            self.state.target_temperature is not None
+            and abs(temperature - self.state.target_temperature) < 0.05
+        ):
+            return
+
+        _LOGGER.info(
+            "Remote climate %s setpoint changed to %.1f°C in room '%s', "
+            "syncing to TRVs",
+            self._remote_climate_id,
+            temperature,
+            self._room_name,
+        )
+
+        self.hass.async_create_task(self.async_set_room_temperature(temperature))
+
+    @staticmethod
+    def _extract_remote_climate_setpoint(state) -> float | None:
+        """Extract the heating setpoint from a climate entity state.
+
+        For dual-mode climates (heat/cool with target_temp_low/high),
+        uses target_temp_low (the heating setpoint).
+        For single-mode climates, uses the temperature attribute.
+        """
+        attrs = state.attributes
+
+        # Check for dual-mode (target_temp_low/target_temp_high)
+        target_temp_low = attrs.get("target_temp_low")
+        if target_temp_low is not None:
+            try:
+                return float(target_temp_low)
+            except (ValueError, TypeError):
+                pass
+
+        # Single-mode: use temperature attribute
+        temperature = attrs.get("temperature")
+        if temperature is not None:
+            try:
+                return float(temperature)
+            except (ValueError, TypeError):
+                pass
+
+        return None
+
+    async def _async_sync_remote_climate(self, temperature: float) -> None:
+        """Sync the given setpoint to the remote climate entity.
+
+        Sets the suppression window before calling the climate service
+        to prevent the resulting state_changed event from looping back.
+        """
+        if not self._remote_climate_id:
+            return
+
+        remote_state = self.hass.states.get(self._remote_climate_id)
+        if remote_state is None or remote_state.state in (
+            STATE_UNAVAILABLE,
+            STATE_UNKNOWN,
+        ):
+            return
+
+        # Set suppression window before calling the service
+        self._remote_setpoint_suppress_until = (
+            time.monotonic() + REMOTE_CLIMATE_SUPPRESS_SECONDS
+        )
+
+        # Determine whether to use dual-mode or single-mode service data
+        service_data: dict[str, Any] = {"entity_id": self._remote_climate_id}
+
+        target_temp_low = remote_state.attributes.get("target_temp_low")
+        if target_temp_low is not None:
+            # Dual-mode: set target_temp_low (heating), preserve target_temp_high
+            target_temp_high = remote_state.attributes.get("target_temp_high")
+            service_data["target_temp_low"] = temperature
+            if target_temp_high is not None:
+                service_data["target_temp_high"] = target_temp_high
+        else:
+            # Single-mode: set temperature directly
+            service_data["temperature"] = temperature
+
+        _LOGGER.debug(
+            "Syncing setpoint %.1f°C to remote climate %s in room '%s'",
+            temperature,
+            self._remote_climate_id,
+            self._room_name,
+        )
+
+        try:
+            await self.hass.services.async_call(
+                "climate", "set_temperature", service_data
+            )
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception(
+                "Failed to sync setpoint to remote climate %s in room '%s'",
+                self._remote_climate_id,
+                self._room_name,
+            )
 
     # ── Window Open Coordination ───────────────────────────────────────
 

@@ -22,6 +22,7 @@ CONF_TRV_ENTITIES: Final = "trv_entities"
 CONF_TEMP_SENSOR: Final = "temperature_sensor"
 CONF_HEAT_SOURCE: Final = "heat_source"
 CONF_HEAT_SOURCE_TYPE: Final = "heat_source_type"
+CONF_REMOTE_CLIMATE: Final = "remote_climate"
 
 HEAT_SOURCE_CLIMATE: Final = "climate"
 HEAT_SOURCE_BINARY_SENSOR: Final = "binary_sensor"
@@ -56,6 +57,9 @@ LOAD_BALANCE_INTERVAL: Final = 15 * 60  # 15 minutes
 LOAD_BALANCE_MAX_AGE: Final = 90 * 60  # 90 minutes
 LOAD_BALANCE_INVALID_THRESHOLD: Final = -500
 LOAD_BALANCE_DISABLED_VALUE: Final = -8000
+
+# ── Remote climate sync ────────────────────────────────────────────────
+REMOTE_CLIMATE_SUPPRESS_SECONDS: Final = 3.0  # Anti-echo suppression window
 
 # ── Setpoint command types ─────────────────────────────────────────────
 SETPOINT_TYPE_USER: Final = 1  # Aggressive motor response (manual dial change)

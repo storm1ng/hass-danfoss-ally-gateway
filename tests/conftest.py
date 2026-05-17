@@ -14,6 +14,7 @@ from custom_components.danfoss_ally_gateway.const import (
     CONF_HEAT_SOURCE,
     CONF_HEAT_SOURCE_TYPE,
     CONF_MQTT_BASE_TOPIC,
+    CONF_REMOTE_CLIMATE,
     CONF_ROOM_NAME,
     CONF_TEMP_SENSOR,
     CONF_TRV_ENTITIES,
@@ -137,6 +138,7 @@ def make_subentry_data(
     temp_sensor: str = "",
     heat_source: str = "",
     heat_source_type: str = "",
+    remote_climate: str = "",
 ) -> dict[str, Any]:
     """Build a subentry data dict for creating a RoomCoordinator."""
     return {
@@ -145,6 +147,7 @@ def make_subentry_data(
         CONF_TEMP_SENSOR: temp_sensor,
         CONF_HEAT_SOURCE: heat_source,
         CONF_HEAT_SOURCE_TYPE: heat_source_type,
+        CONF_REMOTE_CLIMATE: remote_climate,
     }
 
 

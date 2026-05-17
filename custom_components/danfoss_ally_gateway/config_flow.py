@@ -27,6 +27,7 @@ from .const import (
     CONF_HEAT_SOURCE,
     CONF_HEAT_SOURCE_TYPE,
     CONF_MQTT_BASE_TOPIC,
+    CONF_REMOTE_CLIMATE,
     CONF_ROOM_NAME,
     CONF_TEMP_SENSOR,
     CONF_TRV_ENTITIES,
@@ -250,6 +251,7 @@ class RoomSubentryFlowHandler(ConfigSubentryFlow):
                         CONF_HEAT_SOURCE_TYPE: user_input.get(
                             CONF_HEAT_SOURCE_TYPE, ""
                         ),
+                        CONF_REMOTE_CLIMATE: user_input.get(CONF_REMOTE_CLIMATE, ""),
                     },
                 )
 
@@ -280,6 +282,11 @@ class RoomSubentryFlowHandler(ConfigSubentryFlow):
                     vol.Optional(CONF_HEAT_SOURCE): selector.EntitySelector(
                         selector.EntitySelectorConfig(
                             domain=["climate", "binary_sensor"],
+                        )
+                    ),
+                    vol.Optional(CONF_REMOTE_CLIMATE): selector.EntitySelector(
+                        selector.EntitySelectorConfig(
+                            domain="climate",
                         )
                     ),
                 }
@@ -317,6 +324,7 @@ class RoomSubentryFlowHandler(ConfigSubentryFlow):
                         CONF_HEAT_SOURCE_TYPE: user_input.get(
                             CONF_HEAT_SOURCE_TYPE, ""
                         ),
+                        CONF_REMOTE_CLIMATE: user_input.get(CONF_REMOTE_CLIMATE, ""),
                     },
                 )
 
@@ -369,6 +377,16 @@ class RoomSubentryFlowHandler(ConfigSubentryFlow):
                     ): selector.EntitySelector(
                         selector.EntitySelectorConfig(
                             domain=["climate", "binary_sensor"],
+                        )
+                    ),
+                    vol.Optional(
+                        CONF_REMOTE_CLIMATE,
+                        description={
+                            "suggested_value": existing.get(CONF_REMOTE_CLIMATE, "")
+                        },
+                    ): selector.EntitySelector(
+                        selector.EntitySelectorConfig(
+                            domain="climate",
                         )
                     ),
                 }

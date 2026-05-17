@@ -42,21 +42,23 @@
             "step": {
                 "user": {
                     "title": "Add Room",
-                    "description": "Configure a room with Danfoss Ally TRVs. Select your TRV devices from the list. Optionally add an external temperature sensor and a heat source entity.",
+                    "description": "Configure a room with Danfoss Ally TRVs. Select your TRV devices from the list. Optionally add an external temperature sensor, a heat source entity, and a remote climate entity.",
                     "data": {
                         "room_name": "Room name",
                         "area": "Area",
                         "trv_entities": "TRV devices",
                         "temperature_sensor": "External temperature sensor",
                         "heat_source_type": "Heat source type",
-                        "heat_source": "Heat source entity"
+                        "heat_source": "Heat source entity",
+                        "remote_climate": "Remote climate"
                     },
                     "data_description": {
                         "trv_entities": "Select the Danfoss Ally, Popp, or Hive TRV devices for this room.",
                         "area": "Assign the virtual room device to a Home Assistant area.",
                         "temperature_sensor": "An external temperature sensor entity to use instead of the TRV's built-in sensor. Can be any HA temperature sensor.",
                         "heat_source_type": "How to determine if the heating system is active.",
-                        "heat_source": "The climate or binary sensor entity representing your heating system."
+                        "heat_source": "The climate or binary sensor entity representing your heating system.",
+                        "remote_climate": "A climate entity to sync setpoints with TRVs in this room. When a TRV setpoint changes, the remote climate is updated, and vice versa."
                     }
                 },
                 "reconfigure": {
@@ -68,14 +70,16 @@
                         "trv_entities": "TRV devices",
                         "temperature_sensor": "External temperature sensor",
                         "heat_source_type": "Heat source type",
-                        "heat_source": "Heat source entity"
+                        "heat_source": "Heat source entity",
+                        "remote_climate": "Remote climate"
                     },
                     "data_description": {
                         "trv_entities": "Select the Danfoss Ally, Popp, or Hive TRV devices for this room.",
                         "area": "Assign the virtual room device to a Home Assistant area.",
-                        "temperature_sensor": "An external temperature sensor entity to use instead of the TRV's built-in sensor. Can be any HA temperature sensor.",
+                        "temperature_sensor": "An external temperature sensor entity to use instead of the TRV's built-in sensor.",
                         "heat_source_type": "How to determine if the heating system is active.",
-                        "heat_source": "The climate or binary sensor entity representing your heating system."
+                        "heat_source": "The climate or binary sensor entity representing your heating system.",
+                        "remote_climate": "A climate entity to sync setpoints with TRVs in this room. When a TRV setpoint changes, the remote climate is updated, and vice versa."
                     }
                 }
             },

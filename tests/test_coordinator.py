@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from types import MappingProxyType
 from unittest.mock import AsyncMock, MagicMock
 
@@ -992,4 +993,167 @@ class TestPreheatCoordination:
         await hass.async_block_till_done()
 
         mock_backend.async_send_preheat_command.assert_not_called()
+        await coord.async_teardown()
+
+
+# ── Remote Climate Sync ──────────────────────────────────────────────
+
+
+class TestRemoteClimateSync:
+    """Tests for remote climate entity synchronization."""
+
+    async def test_remote_climate_change_syncs_to_trvs(self, hass, mock_backend):
+        """When remote climate entity changes setpoint, it syncs to TRVs."""
+        hass.states.async_set("climate.remote", "heat", {"temperature": 22.0})
+        data = make_subentry_data(remote_climate="climate.remote")
+        coord = RoomCoordinator(hass, mock_backend, data)
+        await coord.async_setup()
+
+        # Change the remote climate setpoint
+        hass.states.async_set("climate.remote", "heat", {"temperature": 24.0})
+        await hass.async_block_till_done()
+
+        assert mock_backend.async_set_occupied_heating_setpoint.call_count == 2
+        calls = mock_backend.async_set_occupied_heating_setpoint.call_args_list
+        assert calls[0][0] == ("trv_1", 24.0)
+        assert calls[1][0] == ("trv_2", 24.0)
+        await coord.async_teardown()
+
+    async def test_remote_climate_no_sync_when_not_configured(
+        self, hass, mock_backend, subentry_data
+    ):
+        """No remote climate configured means no calls to set_temperature service."""
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        await coord.async_setup()
+
+        # No remote climate, so no setpoint sync should happen
+        mock_backend.async_set_occupied_heating_setpoint.assert_not_called()
+        await coord.async_teardown()
+
+    async def test_anti_echo_suppression(self, hass, mock_backend):
+        """After async_set_room_temperature, remote climate changes within suppression window are ignored."""
+        hass.states.async_set("climate.remote", "heat", {"temperature": 22.0})
+        data = make_subentry_data(remote_climate="climate.remote")
+        coord = RoomCoordinator(hass, mock_backend, data)
+        await coord.async_setup()
+
+        # Simulate that we just synced to remote, so suppression is active
+        coord._remote_setpoint_suppress_until = time.monotonic() + 10
+
+        # Change the remote climate setpoint during suppression window
+        hass.states.async_set("climate.remote", "heat", {"temperature": 23.0})
+        await hass.async_block_till_done()
+
+        # Should NOT have synced to TRVs because suppression is active
+        mock_backend.async_set_occupied_heating_setpoint.assert_not_called()
+        await coord.async_teardown()
+
+    async def test_remote_climate_dual_mode(self, hass, mock_backend):
+        """Remote climate with target_temp_low/target_temp_high extracts from target_temp_low."""
+        hass.states.async_set(
+            "climate.remote",
+            "heat",
+            {"target_temp_low": 21.0, "target_temp_high": 25.0},
+        )
+        data = make_subentry_data(remote_climate="climate.remote")
+        coord = RoomCoordinator(hass, mock_backend, data)
+        await coord.async_setup()
+
+        # Change the remote climate with dual-mode temps
+        hass.states.async_set(
+            "climate.remote",
+            "heat",
+            {"target_temp_low": 23.0, "target_temp_high": 27.0},
+        )
+        await hass.async_block_till_done()
+
+        assert mock_backend.async_set_occupied_heating_setpoint.call_count == 2
+        calls = mock_backend.async_set_occupied_heating_setpoint.call_args_list
+        assert calls[0][0] == ("trv_1", 23.0)
+        assert calls[1][0] == ("trv_2", 23.0)
+        await coord.async_teardown()
+
+    async def test_remote_climate_ignores_same_setpoint(self, hass, mock_backend):
+        """If remote climate reports same setpoint as current room setpoint, no sync happens."""
+        hass.states.async_set("climate.remote", "heat", {"temperature": 22.0})
+        data = make_subentry_data(remote_climate="climate.remote")
+        coord = RoomCoordinator(hass, mock_backend, data)
+        await coord.async_setup()
+
+        # Set the room target temperature to 22.0 via TRV state
+        mock_backend.fire_state_update(
+            "trv_1", make_trv_state("trv_1", occupied_heating_setpoint=22.0)
+        )
+        await hass.async_block_till_done()
+        mock_backend.async_set_occupied_heating_setpoint.reset_mock()
+
+        # Remote climate reports same setpoint
+        hass.states.async_set("climate.remote", "heat", {"temperature": 22.0})
+        await hass.async_block_till_done()
+
+        mock_backend.async_set_occupied_heating_setpoint.assert_not_called()
+        await coord.async_teardown()
+
+    async def test_set_room_temp_syncs_to_remote(self, hass, mock_backend):
+        """Calling async_set_room_temperature also calls climate.set_temperature on the remote."""
+        hass.states.async_set("climate.remote", "heat", {"temperature": 22.0})
+        data = make_subentry_data(remote_climate="climate.remote")
+        coord = RoomCoordinator(hass, mock_backend, data)
+        await coord.async_setup()
+
+        # Register a dummy climate.set_temperature service
+        service_calls = []
+
+        async def mock_set_temp(call):
+            service_calls.append(call)
+
+        hass.services.async_register("climate", "set_temperature", mock_set_temp)
+
+        await coord.async_set_room_temperature(25.0)
+
+        # Verify suppression timestamp was set (proves sync to remote was attempted)
+        assert coord._remote_setpoint_suppress_until > time.monotonic()
+
+        # Verify the service was called
+        assert len(service_calls) == 1
+        assert service_calls[0].data["entity_id"] == "climate.remote"
+        assert service_calls[0].data["temperature"] == 25.0
+        await coord.async_teardown()
+
+    async def test_manual_dial_syncs_to_remote(self, hass, mock_backend):
+        """Manual setpoint change on TRV syncs to remote climate."""
+        hass.states.async_set("climate.remote", "heat", {"temperature": 20.0})
+        data = make_subentry_data(remote_climate="climate.remote")
+        coord = RoomCoordinator(hass, mock_backend, data)
+        await coord.async_setup()
+
+        # Register a dummy climate.set_temperature service
+        service_calls = []
+
+        async def mock_set_temp(call):
+            service_calls.append(call)
+
+        hass.services.async_register("climate", "set_temperature", mock_set_temp)
+
+        # Initial state
+        old = make_trv_state("trv_1", occupied_heating_setpoint=20.0)
+        mock_backend.fire_state_update("trv_1", old)
+        await hass.async_block_till_done()
+
+        # Manual dial change on TRV
+        new = make_trv_state(
+            "trv_1",
+            occupied_heating_setpoint=22.0,
+            setpoint_change_source=SETPOINT_SOURCE_MANUAL,
+        )
+        mock_backend.fire_state_update("trv_1", new)
+        await hass.async_block_till_done()
+
+        # Verify suppression timestamp was set (proves _async_sync_remote_climate was called)
+        assert coord._remote_setpoint_suppress_until > time.monotonic()
+
+        # Verify the service was called to sync to remote
+        assert len(service_calls) == 1
+        assert service_calls[0].data["entity_id"] == "climate.remote"
+        assert service_calls[0].data["temperature"] == 22.0
         await coord.async_teardown()
