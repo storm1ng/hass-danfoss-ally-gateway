@@ -700,7 +700,9 @@ class RoomCoordinator:
     # ── Remote Climate Sync ────────────────────────────────────────────
 
     @callback
-    def _handle_remote_climate_change(self, event: Event) -> None:
+    def _handle_remote_climate_change(
+        self, event: Event[EventStateChangedData]
+    ) -> None:
         """Handle remote climate entity state change for bidirectional sync.
 
         When the remote climate's setpoint changes (by user or automation),
