@@ -1,0 +1,170 @@
+"""Tests for diagnostic sensor entities."""
+
+from __future__ import annotations
+
+from conftest import make_subentry_data, make_trv_state
+from homeassistant.components.sensor import SensorStateClass
+from homeassistant.const import PERCENTAGE, EntityCategory
+
+from custom_components.danfoss_ally_gateway.const import DOMAIN
+from custom_components.danfoss_ally_gateway.coordinator import RoomCoordinator
+from custom_components.danfoss_ally_gateway.sensor import (
+    DanfossAllyHeatingDemand,
+    create_room_entities,
+)
+
+# ── Helpers ───────────────────────────────────────────────────────────
+
+
+def _make_entities(hass, mock_backend, subentry_data):
+    """Create a coordinator and sensor entities."""
+    coord = RoomCoordinator(hass, mock_backend, subentry_data)
+    entities = create_room_entities(coord, "entry1", "sub1")
+    return coord, entities
+
+
+def _make_single_trv_entities(hass, mock_backend):
+    """Create sensor entities for a single-TRV room."""
+    data = make_subentry_data(trv_ids=["trv_1"])
+    coord = RoomCoordinator(hass, mock_backend, data)
+    entities = create_room_entities(coord, "entry1", "sub1")
+    return coord, entities
+
+
+# ── Entity Creation ───────────────────────────────────────────────────
+
+
+class TestSensorCreation:
+    """Tests for sensor entity creation."""
+
+    def test_create_multi_trv_room(self, hass, mock_backend, subentry_data):
+        """Multi-TRV room: 2 heating demand sensors."""
+        _, entities = _make_entities(hass, mock_backend, subentry_data)
+        assert len(entities) == 2
+
+    def test_create_single_trv_room(self, hass, mock_backend):
+        """Single-TRV room: 1 heating demand sensor."""
+        _, entities = _make_single_trv_entities(hass, mock_backend)
+        assert len(entities) == 1
+
+    def test_entity_type(self, hass, mock_backend, subentry_data):
+        """All entities are DanfossAllyHeatingDemand."""
+        _, entities = _make_entities(hass, mock_backend, subentry_data)
+        for e in entities:
+            assert isinstance(e, DanfossAllyHeatingDemand)
+
+
+# ── Unique IDs ────────────────────────────────────────────────────────
+
+
+class TestSensorUniqueIds:
+    """Tests for sensor unique_id construction."""
+
+    def test_heating_demand_unique_id(self, hass, mock_backend, subentry_data):
+        _, entities = _make_entities(hass, mock_backend, subentry_data)
+        uids = {e.unique_id for e in entities}
+        assert f"{DOMAIN}_entry1_sub1_trv_1_heating_demand" in uids
+        assert f"{DOMAIN}_entry1_sub1_trv_2_heating_demand" in uids
+
+    def test_all_unique_ids_distinct(self, hass, mock_backend, subentry_data):
+        _, entities = _make_entities(hass, mock_backend, subentry_data)
+        uids = [e.unique_id for e in entities]
+        assert len(uids) == len(set(uids))
+
+
+# ── Names ─────────────────────────────────────────────────────────────
+
+
+class TestSensorNames:
+    """Tests for sensor entity names."""
+
+    def test_heating_demand_name(self, hass, mock_backend, subentry_data):
+        _, entities = _make_entities(hass, mock_backend, subentry_data)
+        names = {e.name for e in entities}
+        assert "trv_1 Heating Demand" in names
+        assert "trv_2 Heating Demand" in names
+
+
+# ── Device Info ───────────────────────────────────────────────────────
+
+
+class TestSensorDeviceInfo:
+    """Tests for device info on sensor entities."""
+
+    def test_device_info_present(self, hass, mock_backend, subentry_data):
+        _, entities = _make_entities(hass, mock_backend, subentry_data)
+        for entity in entities:
+            assert entity.device_info is not None
+            assert (DOMAIN, "entry1_sub1") in entity.device_info["identifiers"]  # type: ignore[typeddict-item]
+
+    def test_subentry_id_stored(self, hass, mock_backend, subentry_data):
+        """All entities store subentry_id for internal use."""
+        _, entities = _make_entities(hass, mock_backend, subentry_data)
+        for entity in entities:
+            assert entity._subentry_id == "sub1"  # type: ignore[misc]
+
+
+# ── Entity Category / Attributes ─────────────────────────────────────
+
+
+class TestSensorAttributes:
+    """Tests for sensor entity category and measurement attributes."""
+
+    def test_all_diagnostic_category(self, hass, mock_backend, subentry_data):
+        """All sensors are categorized as DIAGNOSTIC."""
+        _, entities = _make_entities(hass, mock_backend, subentry_data)
+        for entity in entities:
+            assert entity.entity_category == EntityCategory.DIAGNOSTIC
+
+    def test_heating_demand_unit(self, hass, mock_backend, subentry_data):
+        _, entities = _make_entities(hass, mock_backend, subentry_data)
+        assert entities[0].native_unit_of_measurement == PERCENTAGE
+
+    def test_heating_demand_state_class(self, hass, mock_backend, subentry_data):
+        _, entities = _make_entities(hass, mock_backend, subentry_data)
+        assert entities[0].state_class == SensorStateClass.MEASUREMENT
+
+
+# ── State Values ──────────────────────────────────────────────────────
+
+
+class TestSensorStateValues:
+    """Tests for sensor native_value from coordinator state."""
+
+    def test_heating_demand_none_without_trv_state(
+        self, hass, mock_backend, subentry_data
+    ):
+        """Heating demand is None when no TRV state is available."""
+        coord, entities = _make_entities(hass, mock_backend, subentry_data)
+        assert entities[0].native_value is None
+
+    def test_heating_demand_returns_value(self, hass, mock_backend, subentry_data):
+        coord, entities = _make_entities(hass, mock_backend, subentry_data)
+        trv_state = make_trv_state(entity_id="trv_1", pi_heating_demand=75)
+        coord.state.trv_states["trv_1"] = trv_state
+        heating_demand = next(
+            e
+            for e in entities
+            if isinstance(e, DanfossAllyHeatingDemand) and e._trv_id == "trv_1"
+        )
+        assert heating_demand.native_value == 75
+
+
+# ── Availability ──────────────────────────────────────────────────────
+
+
+class TestSensorAvailability:
+    """Tests for sensor availability tracking."""
+
+    def test_unavailable_by_default(self, hass, mock_backend, subentry_data):
+        coord, entities = _make_entities(hass, mock_backend, subentry_data)
+        for entity in entities:
+            assert entity.available is False
+
+    def test_available_when_coordinator_available(
+        self, hass, mock_backend, subentry_data
+    ):
+        coord, entities = _make_entities(hass, mock_backend, subentry_data)
+        coord.state.available = True
+        for entity in entities:
+            assert entity.available is True
