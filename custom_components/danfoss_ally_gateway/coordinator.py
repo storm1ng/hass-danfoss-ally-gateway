@@ -3,6 +3,11 @@
 Implements per-room coordination logic:
 - TRV state subscription and aggregation
 - Room state computation (temperature, demand, window, availability)
+- External temperature forwarding with Danfoss timing specs
+- Heat availability signaling
+- Setpoint coordination (manual dial forwarding)
+- Load balancing (15-minute cycle)
+- Window open coordination (force external_window_open on other TRVs)
 """
 
 import asyncio
