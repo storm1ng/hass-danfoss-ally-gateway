@@ -877,3 +877,119 @@ class TestWindowCoordination:
 
         mock_backend.async_set_external_window_open.assert_not_called()
         await coord.async_teardown()
+
+
+# ── Preheat Coordination ─────────────────────────────────────────────
+
+
+class TestPreheatCoordination:
+    """Tests for preheat coordination across room TRVs."""
+
+    async def test_preheat_forwards_to_other_trvs(
+        self, hass, mock_backend, subentry_data
+    ):
+        """Preheat event on one TRV is forwarded to others."""
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        await coord.async_setup()
+
+        mock_backend.fire_state_update(
+            "trv_1",
+            make_trv_state("trv_1", preheat_status=True, preheat_time=1234),
+        )
+        await hass.async_block_till_done()
+
+        mock_backend.async_send_preheat_command.assert_called_once_with("trv_2", 1234)
+        await coord.async_teardown()
+
+    async def test_skips_single_trv_room(
+        self, hass, mock_backend, single_trv_subentry_data
+    ):
+        """Preheat coordination is skipped for single-TRV rooms."""
+        coord = RoomCoordinator(hass, mock_backend, single_trv_subentry_data)
+        await coord.async_setup()
+
+        mock_backend.fire_state_update(
+            "trv_1",
+            make_trv_state("trv_1", preheat_status=True, preheat_time=1234),
+        )
+        await hass.async_block_till_done()
+
+        mock_backend.async_send_preheat_command.assert_not_called()
+        await coord.async_teardown()
+
+    async def test_deduplicates_same_preheat_time(
+        self, hass, mock_backend, subentry_data
+    ):
+        """Same preheat_time from same TRV is not forwarded twice."""
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        await coord.async_setup()
+
+        mock_backend.fire_state_update(
+            "trv_1",
+            make_trv_state("trv_1", preheat_status=True, preheat_time=1234),
+        )
+        await hass.async_block_till_done()
+        assert mock_backend.async_send_preheat_command.call_count == 1
+
+        # Same preheat_time again
+        mock_backend.async_send_preheat_command.reset_mock()
+        mock_backend.fire_state_update(
+            "trv_1",
+            make_trv_state("trv_1", preheat_status=True, preheat_time=1234),
+        )
+        await hass.async_block_till_done()
+        mock_backend.async_send_preheat_command.assert_not_called()
+        await coord.async_teardown()
+
+    async def test_different_preheat_time_is_forwarded(
+        self, hass, mock_backend, subentry_data
+    ):
+        """Different preheat_time from same TRV is forwarded."""
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        await coord.async_setup()
+
+        mock_backend.fire_state_update(
+            "trv_1",
+            make_trv_state("trv_1", preheat_status=True, preheat_time=1234),
+        )
+        await hass.async_block_till_done()
+
+        mock_backend.async_send_preheat_command.reset_mock()
+        mock_backend.fire_state_update(
+            "trv_1",
+            make_trv_state("trv_1", preheat_status=True, preheat_time=5678),
+        )
+        await hass.async_block_till_done()
+
+        mock_backend.async_send_preheat_command.assert_called_once_with("trv_2", 5678)
+        await coord.async_teardown()
+
+    async def test_no_preheat_when_status_false(
+        self, hass, mock_backend, subentry_data
+    ):
+        """No forwarding when preheat_status is False."""
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        await coord.async_setup()
+
+        mock_backend.fire_state_update(
+            "trv_1",
+            make_trv_state("trv_1", preheat_status=False, preheat_time=1234),
+        )
+        await hass.async_block_till_done()
+
+        mock_backend.async_send_preheat_command.assert_not_called()
+        await coord.async_teardown()
+
+    async def test_no_preheat_when_time_none(self, hass, mock_backend, subentry_data):
+        """No forwarding when preheat_time is None."""
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        await coord.async_setup()
+
+        mock_backend.fire_state_update(
+            "trv_1",
+            make_trv_state("trv_1", preheat_status=True, preheat_time=None),
+        )
+        await hass.async_block_till_done()
+
+        mock_backend.async_send_preheat_command.assert_not_called()
+        await coord.async_teardown()

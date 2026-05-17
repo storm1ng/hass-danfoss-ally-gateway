@@ -8,6 +8,7 @@ Implements per-room coordination logic:
 - Setpoint coordination (manual dial forwarding)
 - Load balancing (15-minute cycle)
 - Window open coordination (force external_window_open on other TRVs)
+- Preheat coordination (forward preheat commands to other TRVs)
 """
 
 import asyncio
@@ -152,6 +153,9 @@ class RoomCoordinator:
 
         # Window coordination
         self._forced_window_open_trvs: set[str] = set()  # TRVs we forced open
+
+        # Preheat coordination
+        self._last_forwarded_preheat: dict[str, int] = {}  # trv_id → preheat_time
 
     @property
     def room_name(self) -> str:
@@ -329,6 +333,11 @@ class RoomCoordinator:
         # Check for window open coordination
         self.hass.async_create_task(
             self._async_check_window_coordination(trv_id, trv_state)
+        )
+
+        # Check for preheat coordination
+        self.hass.async_create_task(
+            self._async_check_preheat_coordination(trv_id, trv_state)
         )
 
         self._notify_state_update()
@@ -743,12 +752,55 @@ class RoomCoordinator:
                                 await self._backend.async_set_external_window_open(
                                     forced_trv, False
                                 )
-                            except Exception:  # noqa: BLE001
+                            except Exception:
                                 _LOGGER.exception(
                                     "Failed to clear external_window_open on %s",
                                     forced_trv,
                                 )
                         self._forced_window_open_trvs.clear()
+
+    # ── Preheat Coordination ──────────────────────────────────────────
+
+    async def _async_check_preheat_coordination(
+        self, trv_id: str, trv_state: TRVState
+    ) -> None:
+        """Check and coordinate preheat events across room TRVs.
+
+        Per Danfoss spec: When a TRV reports preheat_status=true and a
+        preheat_time, forward the preheat_time to other room TRVs via
+        PreHeatCommand. Deduplicates by tracking the last forwarded value
+        per TRV.
+        """
+        if len(self._trv_ids) <= 1:
+            return
+
+        if not trv_state.preheat_status or trv_state.preheat_time is None:
+            return
+
+        # Deduplicate: skip if we already forwarded this exact preheat_time
+        # from this TRV
+        last_forwarded = self._last_forwarded_preheat.get(trv_id)
+        if last_forwarded == trv_state.preheat_time:
+            return
+
+        self._last_forwarded_preheat[trv_id] = trv_state.preheat_time
+
+        _LOGGER.debug(
+            "Preheat detected on %s in room '%s' (time=%d), forwarding to other TRVs",
+            trv_id,
+            self._room_name,
+            trv_state.preheat_time,
+        )
+
+        for other_trv in self._trv_ids:
+            if other_trv == trv_id:
+                continue
+            try:
+                await self._backend.async_send_preheat_command(
+                    other_trv, trv_state.preheat_time
+                )
+            except Exception:
+                _LOGGER.exception("Failed to forward preheat to TRV %s", other_trv)
 
     # ── Load Balancing ─────────────────────────────────────────────────
 
