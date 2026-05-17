@@ -278,6 +278,10 @@ class RoomCoordinator:
                 ext_state.timer()
                 ext_state.timer = None
 
+        if self._load_balance_timer is not None:
+            self._load_balance_timer()
+            self._load_balance_timer = None
+
         # Unsubscribe from everything
         for unsub in self._unsub_callbacks:
             unsub()
