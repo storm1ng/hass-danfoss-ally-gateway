@@ -1157,3 +1157,52 @@ class TestRemoteClimateSync:
         assert service_calls[0].data["entity_id"] == "climate.remote"
         assert service_calls[0].data["temperature"] == 22.0
         await coord.async_teardown()
+
+
+# ── Time Sync ─────────────────────────────────────────────────────────
+
+
+class TestTimeSync:
+    """Tests for weekly time synchronization."""
+
+    async def test_time_sync_timer_scheduled(self, hass, mock_backend, subentry_data):
+        """Time sync timer is scheduled on setup."""
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        await coord.async_setup()
+
+        assert coord._time_sync_timer is not None
+        await coord.async_teardown()
+
+    async def test_time_sync_timer_cancelled_on_teardown(
+        self, hass, mock_backend, subentry_data
+    ):
+        """Time sync timer is cancelled on teardown."""
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        await coord.async_setup()
+        assert coord._time_sync_timer is not None
+
+        await coord.async_teardown()
+        assert coord._time_sync_timer is None
+
+    async def test_sync_time_all_calls_backend(self, hass, mock_backend, subentry_data):
+        """_async_sync_time_all calls async_sync_time for each TRV."""
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        await coord.async_setup()
+
+        await coord._async_sync_time_all()
+
+        assert mock_backend.async_sync_time.call_count == 2
+        mock_backend.async_sync_time.assert_any_call("trv_1")
+        mock_backend.async_sync_time.assert_any_call("trv_2")
+        await coord.async_teardown()
+
+    async def test_sync_time_handles_exception(self, hass, mock_backend, subentry_data):
+        """Exception on one TRV does not prevent syncing others."""
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        await coord.async_setup()
+
+        mock_backend.async_sync_time.side_effect = [Exception("fail"), None]
+        await coord._async_sync_time_all()
+
+        assert mock_backend.async_sync_time.call_count == 2
+        await coord.async_teardown()

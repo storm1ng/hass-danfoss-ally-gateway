@@ -61,6 +61,9 @@ LOAD_BALANCE_DISABLED_VALUE: Final = -8000
 # ── Remote climate sync ────────────────────────────────────────────────
 REMOTE_CLIMATE_SUPPRESS_SECONDS: Final = 3.0  # Anti-echo suppression window
 
+# ── Time sync ──────────────────────────────────────────────────────────
+TIME_SYNC_INTERVAL: Final = 7 * 24 * 60 * 60  # Weekly
+
 # ── Setpoint command types ─────────────────────────────────────────────
 SETPOINT_TYPE_USER: Final = 1  # Aggressive motor response (manual dial change)
 

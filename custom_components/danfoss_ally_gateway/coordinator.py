@@ -56,6 +56,7 @@ from .const import (
     REMOTE_CLIMATE_SUPPRESS_SECONDS,
     SETPOINT_SOURCE_MANUAL,
     SETPOINT_TYPE_USER,
+    TIME_SYNC_INTERVAL,
     TRV_AVAILABILITY_TIMEOUT,
     WINDOW_OPEN_DETECTED,
     WINDOW_OPEN_EXTERNAL_OPEN,
@@ -163,6 +164,8 @@ class RoomCoordinator:
         # Remote climate anti-echo
         self._remote_setpoint_suppress_until: float = 0.0  # monotonic timestamp
 
+        self._time_sync_timer: CALLBACK_TYPE | None = None
+
     @property
     def room_name(self) -> str:
         """Return the room name."""
@@ -264,6 +267,9 @@ class RoomCoordinator:
             )
             self._unsub_callbacks.append(unsub)
 
+        # Schedule weekly time sync
+        self._schedule_time_sync()
+
         # Start load balancing timer (only for multi-TRV rooms)
         if len(self._trv_ids) > 1:
             self._schedule_load_balance()
@@ -281,6 +287,10 @@ class RoomCoordinator:
         if self._load_balance_timer is not None:
             self._load_balance_timer()
             self._load_balance_timer = None
+
+        if self._time_sync_timer is not None:
+            self._time_sync_timer()
+            self._time_sync_timer = None
 
         # Unsubscribe from everything
         for unsub in self._unsub_callbacks:
@@ -948,6 +958,31 @@ class RoomCoordinator:
                 )
             except Exception:
                 _LOGGER.exception("Failed to forward preheat to TRV %s", other_trv)
+
+    # ── Time Synchronization ──────────────────────────────────────────
+
+    def _schedule_time_sync(self) -> None:
+        """Schedule weekly time sync."""
+
+        @callback
+        def _run_time_sync(_now: Any) -> None:
+            self._time_sync_timer = None
+            self.hass.async_create_task(self._async_sync_time_all())
+            self._schedule_time_sync()
+
+        self._time_sync_timer = async_call_later(
+            self.hass, TIME_SYNC_INTERVAL, _run_time_sync
+        )
+
+    async def _async_sync_time_all(self) -> None:
+        """Synchronize time to all TRVs in the room."""
+        _LOGGER.debug("Syncing time to all TRVs in room '%s'", self._room_name)
+
+        for trv_id in self._trv_ids:
+            try:
+                await self._backend.async_sync_time(trv_id)
+            except Exception:  # noqa: BLE001
+                _LOGGER.exception("Failed to sync time to TRV %s", trv_id)
 
     # ── Load Balancing ─────────────────────────────────────────────────
 
