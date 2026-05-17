@@ -64,6 +64,11 @@ REMOTE_CLIMATE_SUPPRESS_SECONDS: Final = 3.0  # Anti-echo suppression window
 # ── Time sync ──────────────────────────────────────────────────────────
 TIME_SYNC_INTERVAL: Final = 7 * 24 * 60 * 60  # Weekly
 
+# ── Schedule validation ────────────────────────────────────────────────
+SCHEDULE_MAX_DAILY_TRANSITIONS: Final = 6
+SCHEDULE_MAX_WEEKLY_TRANSITIONS: Final = 42  # 7 × 6
+SCHEDULE_MINUTES_PER_DAY: Final = 1440  # 24 × 60
+
 # ── Setpoint command types ─────────────────────────────────────────────
 SETPOINT_TYPE_USER: Final = 1  # Aggressive motor response (manual dial change)
 
