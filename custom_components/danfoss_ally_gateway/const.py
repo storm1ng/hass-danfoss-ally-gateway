@@ -34,6 +34,7 @@ TRV_AVAILABILITY_TIMEOUT: Final = 2 * 60 * 60  # 2 hours without update = unavai
 
 # ── Window open detection states ───────────────────────────────────────
 WINDOW_OPEN_DETECTED: Final = 3
+WINDOW_OPEN_EXTERNAL_OPEN: Final = 4
 
 # ── Special values ─────────────────────────────────────────────────────
 EXTERNAL_TEMP_DISABLED: Final = -8000  # Value to send to disable external temp

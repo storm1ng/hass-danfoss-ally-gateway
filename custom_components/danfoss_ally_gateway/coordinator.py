@@ -50,6 +50,7 @@ from .const import (
     SETPOINT_TYPE_USER,
     TRV_AVAILABILITY_TIMEOUT,
     WINDOW_OPEN_DETECTED,
+    WINDOW_OPEN_EXTERNAL_OPEN,
     Z2M_ATTR_LOAD_ROOM_MEAN,
 )
 
@@ -143,6 +144,9 @@ class RoomCoordinator:
         # Setpoint coordination
         self._setpoint_lock = asyncio.Lock()
         self._programmatic_setpoint: bool = False
+
+        # Window coordination
+        self._forced_window_open_trvs: set[str] = set()  # TRVs we forced open
 
     @property
     def room_name(self) -> str:
@@ -316,6 +320,11 @@ class RoomCoordinator:
             self.hass.async_create_task(
                 self._async_check_setpoint_coordination(trv_id, old_state, trv_state)
             )
+
+        # Check for window open coordination
+        self.hass.async_create_task(
+            self._async_check_window_coordination(trv_id, trv_state)
+        )
 
         self._notify_state_update()
 
@@ -648,6 +657,93 @@ class RoomCoordinator:
 
         self.state.target_temperature = temperature
         self._notify_state_update()
+
+    # ── Window Open Coordination ───────────────────────────────────────
+
+    async def _async_check_window_coordination(
+        self, trv_id: str, trv_state: TRVState
+    ) -> None:
+        """Check and coordinate window open events across room TRVs.
+
+        Per Danfoss spec:
+        - When a TRV detects window open (state >= 3), force
+          external_window_open=true on other room TRVs.
+        - Deactivate (set false) when all forced TRVs report state 4.
+        """
+        if len(self._trv_ids) <= 1:
+            return
+
+        window_state = trv_state.window_open_detection
+        if window_state is None:
+            return
+
+        if (
+            window_state >= WINDOW_OPEN_DETECTED
+            and trv_id not in self._forced_window_open_trvs
+        ):
+            # This TRV detected window open - force other TRVs
+            other_trvs = [t for t in self._trv_ids if t != trv_id]
+            newly_forced = [
+                t for t in other_trvs if t not in self._forced_window_open_trvs
+            ]
+
+            if newly_forced:
+                _LOGGER.info(
+                    "Window open detected on %s in room '%s', forcing %d other TRVs",
+                    trv_id,
+                    self._room_name,
+                    len(newly_forced),
+                )
+                for other_trv in newly_forced:
+                    try:
+                        await self._backend.async_set_external_window_open(
+                            other_trv, True
+                        )
+                        self._forced_window_open_trvs.add(other_trv)
+                    except Exception:  # noqa: BLE001
+                        _LOGGER.exception(
+                            "Failed to set external_window_open on %s", other_trv
+                        )
+        else:
+            # Check if all forced TRVs have reached state 4 (open confirmed)
+            # and we can deactivate. Only check TRVs that have reported state;
+            # skip forced TRVs not yet in trv_states to avoid creating
+            # phantom entries with None fields.
+            if self._forced_window_open_trvs:
+                forced_with_state = [
+                    t
+                    for t in self._forced_window_open_trvs
+                    if t in self.state.trv_states
+                ]
+                # Only proceed if we have state for at least one forced TRV
+                all_confirmed = len(forced_with_state) > 0 and all(
+                    self.state.trv_states[t].window_open_detection
+                    == WINDOW_OPEN_EXTERNAL_OPEN
+                    for t in forced_with_state
+                )
+                if all_confirmed:
+                    # Check if the detecting TRV(s) have closed
+                    any_still_open = any(
+                        (s.window_open_detection or 0) >= WINDOW_OPEN_DETECTED
+                        for tid, s in self.state.trv_states.items()
+                        if tid not in self._forced_window_open_trvs
+                    )
+                    if not any_still_open:
+                        _LOGGER.info(
+                            "Window closed in room '%s', deactivating forced open",
+                            self._room_name,
+                        )
+                        for forced_trv in list(self._forced_window_open_trvs):
+                            try:
+                                await self._backend.async_set_external_window_open(
+                                    forced_trv, False
+                                )
+                            except Exception:  # noqa: BLE001
+                                _LOGGER.exception(
+                                    "Failed to clear external_window_open on %s",
+                                    forced_trv,
+                                )
+                        self._forced_window_open_trvs.clear()
 
     # ── Load Balancing ─────────────────────────────────────────────────
 
