@@ -1,7 +1,7 @@
 """Diagnostic sensor entities for Danfoss Ally Gateway.
 
 Provides:
-- Per-TRV: PI Heating Demand (%)
+- Per-TRV: PI Heating Demand (%), Load Estimate
 """
 
 from __future__ import annotations
@@ -55,8 +55,15 @@ def create_room_entities(
 
     # Per-TRV sensors
     for trv_id in coordinator.trv_ids:
-        entities.append(
-            DanfossAllyHeatingDemand(coordinator, config_entry_id, subentry_id, trv_id),
+        entities.extend(
+            [
+                DanfossAllyHeatingDemand(
+                    coordinator, config_entry_id, subentry_id, trv_id
+                ),
+                DanfossAllyLoadEstimate(
+                    coordinator, config_entry_id, subentry_id, trv_id
+                ),
+            ]
         )
 
     return entities
@@ -138,3 +145,33 @@ class DanfossAllyHeatingDemand(_DanfossAllySensorBase):
         if trv_state is None:
             return None
         return trv_state.pi_heating_demand
+
+
+class DanfossAllyLoadEstimate(_DanfossAllySensorBase):
+    """Sensor: TRV load estimate value."""
+
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:scale-balance"
+
+    def __init__(
+        self,
+        coordinator: RoomCoordinator,
+        config_entry_id: str,
+        subentry_id: str,
+        trv_id: str,
+    ) -> None:
+        """Initialize load estimate sensor."""
+        super().__init__(coordinator, config_entry_id, subentry_id)
+        self._trv_id = trv_id
+        self._attr_unique_id = (
+            f"{DOMAIN}_{config_entry_id}_{subentry_id}_{trv_id}_load_estimate"
+        )
+        self._attr_name = f"{trv_id} Load Estimate"
+
+    @property
+    def native_value(self) -> int | None:
+        """Return the load estimate."""
+        trv_state = self._coordinator.state.trv_states.get(self._trv_id)
+        if trv_state is None:
+            return None
+        return trv_state.load_estimate

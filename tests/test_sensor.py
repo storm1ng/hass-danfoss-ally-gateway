@@ -10,6 +10,7 @@ from custom_components.danfoss_ally_gateway.const import DOMAIN
 from custom_components.danfoss_ally_gateway.coordinator import RoomCoordinator
 from custom_components.danfoss_ally_gateway.sensor import (
     DanfossAllyHeatingDemand,
+    DanfossAllyLoadEstimate,
     create_room_entities,
 )
 
@@ -38,20 +39,24 @@ class TestSensorCreation:
     """Tests for sensor entity creation."""
 
     def test_create_multi_trv_room(self, hass, mock_backend, subentry_data):
-        """Multi-TRV room: 2 heating demand sensors."""
+        """Multi-TRV room: 2 heating demand + 2 load estimate = 4."""
         _, entities = _make_entities(hass, mock_backend, subentry_data)
-        assert len(entities) == 2
+        assert len(entities) == 4
 
     def test_create_single_trv_room(self, hass, mock_backend):
-        """Single-TRV room: 1 heating demand sensor."""
+        """Single-TRV room: 1 heating demand + 1 load estimate = 2."""
         _, entities = _make_single_trv_entities(hass, mock_backend)
-        assert len(entities) == 1
+        assert len(entities) == 2
 
-    def test_entity_type(self, hass, mock_backend, subentry_data):
-        """All entities are DanfossAllyHeatingDemand."""
+    def test_entity_types(self, hass, mock_backend, subentry_data):
+        """Both entity types are present."""
         _, entities = _make_entities(hass, mock_backend, subentry_data)
-        for e in entities:
-            assert isinstance(e, DanfossAllyHeatingDemand)
+        heating_demand = [
+            e for e in entities if isinstance(e, DanfossAllyHeatingDemand)
+        ]
+        load_est = [e for e in entities if isinstance(e, DanfossAllyLoadEstimate)]
+        assert len(heating_demand) == 2
+        assert len(load_est) == 2
 
 
 # ── Unique IDs ────────────────────────────────────────────────────────
@@ -62,9 +67,19 @@ class TestSensorUniqueIds:
 
     def test_heating_demand_unique_id(self, hass, mock_backend, subentry_data):
         _, entities = _make_entities(hass, mock_backend, subentry_data)
-        uids = {e.unique_id for e in entities}
+        heating_demand = [
+            e for e in entities if isinstance(e, DanfossAllyHeatingDemand)
+        ]
+        uids = {e.unique_id for e in heating_demand}
         assert f"{DOMAIN}_entry1_sub1_trv_1_heating_demand" in uids
         assert f"{DOMAIN}_entry1_sub1_trv_2_heating_demand" in uids
+
+    def test_load_estimate_unique_id(self, hass, mock_backend, subentry_data):
+        _, entities = _make_entities(hass, mock_backend, subentry_data)
+        load_est = [e for e in entities if isinstance(e, DanfossAllyLoadEstimate)]
+        uids = {e.unique_id for e in load_est}
+        assert f"{DOMAIN}_entry1_sub1_trv_1_load_estimate" in uids
+        assert f"{DOMAIN}_entry1_sub1_trv_2_load_estimate" in uids
 
     def test_all_unique_ids_distinct(self, hass, mock_backend, subentry_data):
         _, entities = _make_entities(hass, mock_backend, subentry_data)
@@ -80,9 +95,19 @@ class TestSensorNames:
 
     def test_heating_demand_name(self, hass, mock_backend, subentry_data):
         _, entities = _make_entities(hass, mock_backend, subentry_data)
-        names = {e.name for e in entities}
+        heating_demand = [
+            e for e in entities if isinstance(e, DanfossAllyHeatingDemand)
+        ]
+        names = {e.name for e in heating_demand}
         assert "trv_1 Heating Demand" in names
         assert "trv_2 Heating Demand" in names
+
+    def test_load_estimate_name(self, hass, mock_backend, subentry_data):
+        _, entities = _make_entities(hass, mock_backend, subentry_data)
+        load_est = [e for e in entities if isinstance(e, DanfossAllyLoadEstimate)]
+        names = {e.name for e in load_est}
+        assert "trv_1 Load Estimate" in names
+        assert "trv_2 Load Estimate" in names
 
 
 # ── Device Info ───────────────────────────────────────────────────────
@@ -118,11 +143,22 @@ class TestSensorAttributes:
 
     def test_heating_demand_unit(self, hass, mock_backend, subentry_data):
         _, entities = _make_entities(hass, mock_backend, subentry_data)
-        assert entities[0].native_unit_of_measurement == PERCENTAGE
+        heating_demand = next(
+            e for e in entities if isinstance(e, DanfossAllyHeatingDemand)
+        )
+        assert heating_demand.native_unit_of_measurement == PERCENTAGE
 
     def test_heating_demand_state_class(self, hass, mock_backend, subentry_data):
         _, entities = _make_entities(hass, mock_backend, subentry_data)
-        assert entities[0].state_class == SensorStateClass.MEASUREMENT
+        heating_demand = next(
+            e for e in entities if isinstance(e, DanfossAllyHeatingDemand)
+        )
+        assert heating_demand.state_class == SensorStateClass.MEASUREMENT
+
+    def test_load_estimate_state_class(self, hass, mock_backend, subentry_data):
+        _, entities = _make_entities(hass, mock_backend, subentry_data)
+        load_est = next(e for e in entities if isinstance(e, DanfossAllyLoadEstimate))
+        assert load_est.state_class == SensorStateClass.MEASUREMENT
 
 
 # ── State Values ──────────────────────────────────────────────────────
@@ -136,7 +172,10 @@ class TestSensorStateValues:
     ):
         """Heating demand is None when no TRV state is available."""
         coord, entities = _make_entities(hass, mock_backend, subentry_data)
-        assert entities[0].native_value is None
+        heating_demand = next(
+            e for e in entities if isinstance(e, DanfossAllyHeatingDemand)
+        )
+        assert heating_demand.native_value is None
 
     def test_heating_demand_returns_value(self, hass, mock_backend, subentry_data):
         coord, entities = _make_entities(hass, mock_backend, subentry_data)
@@ -148,6 +187,24 @@ class TestSensorStateValues:
             if isinstance(e, DanfossAllyHeatingDemand) and e._trv_id == "trv_1"
         )
         assert heating_demand.native_value == 75
+
+    def test_load_estimate_none_without_trv_state(
+        self, hass, mock_backend, subentry_data
+    ):
+        coord, entities = _make_entities(hass, mock_backend, subentry_data)
+        load_est = next(e for e in entities if isinstance(e, DanfossAllyLoadEstimate))
+        assert load_est.native_value is None
+
+    def test_load_estimate_returns_value(self, hass, mock_backend, subentry_data):
+        coord, entities = _make_entities(hass, mock_backend, subentry_data)
+        trv_state = make_trv_state(entity_id="trv_1", load_estimate=200)
+        coord.state.trv_states["trv_1"] = trv_state
+        load_est = next(
+            e
+            for e in entities
+            if isinstance(e, DanfossAllyLoadEstimate) and e._trv_id == "trv_1"
+        )
+        assert load_est.native_value == 200
 
 
 # ── Availability ──────────────────────────────────────────────────────
