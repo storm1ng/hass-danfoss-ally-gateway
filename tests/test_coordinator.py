@@ -13,6 +13,7 @@ from homeassistant.helpers import device_registry as dr
 
 from custom_components.danfoss_ally_gateway.backend.z2m import Z2MBackend
 from custom_components.danfoss_ally_gateway.const import (
+    LOAD_BALANCE_DISABLED_VALUE,
     SETPOINT_SOURCE_MANUAL,
     SETPOINT_TYPE_USER,
     WINDOW_OPEN_DETECTED,
@@ -574,4 +575,162 @@ class TestDeviceIdResolution:
         assert coord.trv_ids == ["Living Room TRV", "Kitchen TRV"]
         assert "Living Room TRV" in mock_backend._subscribed_trvs
         assert "Kitchen TRV" in mock_backend._subscribed_trvs
+        await coord.async_teardown()
+
+
+# ── Load Balancing ────────────────────────────────────────────────────
+
+
+class TestLoadBalancing:
+    """Tests for load balancing logic."""
+
+    async def test_skips_single_trv_room(
+        self, hass, mock_backend, single_trv_subentry_data
+    ):
+        coord = RoomCoordinator(hass, mock_backend, single_trv_subentry_data)
+        await coord.async_setup()
+
+        # Load balance timer should NOT be scheduled
+        assert coord._load_balance_timer is None
+        await coord.async_teardown()
+
+    async def test_schedules_timer_for_multi_trv(
+        self, hass, mock_backend, subentry_data
+    ):
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        await coord.async_setup()
+
+        assert coord._load_balance_timer is not None
+        await coord.async_teardown()
+
+    async def test_run_load_balance_calculates_mean(
+        self, hass, mock_backend, subentry_data
+    ):
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        await coord.async_setup()
+
+        # Simulate load estimates from both TRVs
+        mock_backend.fire_state_update(
+            "trv_1", make_trv_state("trv_1", load_estimate=100)
+        )
+        mock_backend.fire_state_update(
+            "trv_2", make_trv_state("trv_2", load_estimate=200)
+        )
+        await hass.async_block_till_done()
+
+        # Manually run load balance
+        await coord._async_run_load_balance()
+
+        assert mock_backend.async_set_load_room_mean.call_count == 2
+        # Mean of 100, 200 = 150
+        for call in mock_backend.async_set_load_room_mean.call_args_list:
+            assert call[0][1] == 150
+        assert coord.state.load_room_mean == 150
+        await coord.async_teardown()
+
+    async def test_discards_invalid_estimates(self, hass, mock_backend, subentry_data):
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        await coord.async_setup()
+
+        mock_backend.fire_state_update(
+            "trv_1", make_trv_state("trv_1", load_estimate=LOAD_BALANCE_DISABLED_VALUE)
+        )
+        mock_backend.fire_state_update(
+            "trv_2", make_trv_state("trv_2", load_estimate=200)
+        )
+        await hass.async_block_till_done()
+
+        await coord._async_run_load_balance()
+
+        # Only trv_2's estimate should be used; mean = 200
+        for call in mock_backend.async_set_load_room_mean.call_args_list:
+            assert call[0][1] == 200
+        await coord.async_teardown()
+
+    async def test_discards_below_threshold(self, hass, mock_backend, subentry_data):
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        await coord.async_setup()
+
+        mock_backend.fire_state_update(
+            "trv_1", make_trv_state("trv_1", load_estimate=-600)
+        )
+        mock_backend.fire_state_update(
+            "trv_2", make_trv_state("trv_2", load_estimate=200)
+        )
+        await hass.async_block_till_done()
+
+        await coord._async_run_load_balance()
+        # Only trv_2 valid
+        for call in mock_backend.async_set_load_room_mean.call_args_list:
+            assert call[0][1] == 200
+        await coord.async_teardown()
+
+    async def test_no_valid_estimates_skips(self, hass, mock_backend, subentry_data):
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        await coord.async_setup()
+
+        # No state updates, so no estimates
+        await coord._async_run_load_balance()
+        assert mock_backend.async_set_load_room_mean.call_count == 0
+        await coord.async_teardown()
+
+    async def test_seeds_load_room_mean_from_trv(
+        self, hass, mock_backend, subentry_data
+    ):
+        """load_room_mean is seeded from the TRV's raw payload immediately."""
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        await coord.async_setup()
+
+        assert coord.state.load_room_mean is None  # Not yet seeded
+
+        # TRV reports load_room_mean in its raw MQTT payload
+        trv_state = make_trv_state("trv_1", load_estimate=100)
+        trv_state.raw = {"load_room_mean": 861}
+        mock_backend.fire_state_update("trv_1", trv_state)
+        await hass.async_block_till_done()
+
+        assert coord.state.load_room_mean == 861
+        await coord.async_teardown()
+
+    async def test_seed_does_not_overwrite_calculated_mean(
+        self, hass, mock_backend, subentry_data
+    ):
+        """Once load_room_mean is set, seeding from TRV raw should not overwrite."""
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        await coord.async_setup()
+
+        # Simulate a load balance cycle producing a value
+        mock_backend.fire_state_update(
+            "trv_1", make_trv_state("trv_1", load_estimate=100)
+        )
+        mock_backend.fire_state_update(
+            "trv_2", make_trv_state("trv_2", load_estimate=200)
+        )
+        await hass.async_block_till_done()
+        await coord._async_run_load_balance()
+        assert coord.state.load_room_mean == 150
+
+        # Now a TRV reports a different load_room_mean in raw
+        trv_state = make_trv_state("trv_1", load_estimate=100)
+        trv_state.raw = {"load_room_mean": 999}
+        mock_backend.fire_state_update("trv_1", trv_state)
+        await hass.async_block_till_done()
+
+        # Should NOT have been overwritten
+        assert coord.state.load_room_mean == 150
+        await coord.async_teardown()
+
+    async def test_seed_skipped_for_single_trv(
+        self, hass, mock_backend, single_trv_subentry_data
+    ):
+        """Seeding load_room_mean is skipped for single-TRV rooms."""
+        coord = RoomCoordinator(hass, mock_backend, single_trv_subentry_data)
+        await coord.async_setup()
+
+        trv_state = make_trv_state("trv_1", load_estimate=100)
+        trv_state.raw = {"load_room_mean": 500}
+        mock_backend.fire_state_update("trv_1", trv_state)
+        await hass.async_block_till_done()
+
+        assert coord.state.load_room_mean is None
         await coord.async_teardown()

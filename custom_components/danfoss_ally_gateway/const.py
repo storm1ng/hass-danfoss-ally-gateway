@@ -50,6 +50,12 @@ EXT_TEMP_COVERED_MAX_INTERVAL: Final = 30 * 60  # 30 minutes
 # Temperature change threshold for immediate send
 EXT_TEMP_CHANGE_THRESHOLD: Final = 0.1  # Kelvin / degrees C
 
+# Load balancing
+LOAD_BALANCE_INTERVAL: Final = 15 * 60  # 15 minutes
+LOAD_BALANCE_MAX_AGE: Final = 90 * 60  # 90 minutes
+LOAD_BALANCE_INVALID_THRESHOLD: Final = -500
+LOAD_BALANCE_DISABLED_VALUE: Final = -8000
+
 # ── Setpoint command types ─────────────────────────────────────────────
 SETPOINT_TYPE_USER: Final = 1  # Aggressive motor response (manual dial change)
 

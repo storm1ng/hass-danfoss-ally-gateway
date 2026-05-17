@@ -26,7 +26,9 @@ from homeassistant.helpers.event import (
     async_track_state_change_event,
 )
 
-from custom_components.danfoss_ally_gateway.const import (
+from .backend import DanfossBackend, TRVState
+from .backend.z2m import Z2MBackend
+from .const import (
     CONF_HEAT_SOURCE,
     CONF_HEAT_SOURCE_TYPE,
     CONF_ROOM_NAME,
@@ -40,14 +42,16 @@ from custom_components.danfoss_ally_gateway.const import (
     EXTERNAL_TEMP_DISABLED,
     HEAT_SOURCE_BINARY_SENSOR,
     HEAT_SOURCE_CLIMATE,
+    LOAD_BALANCE_DISABLED_VALUE,
+    LOAD_BALANCE_INTERVAL,
+    LOAD_BALANCE_INVALID_THRESHOLD,
+    LOAD_BALANCE_MAX_AGE,
     SETPOINT_SOURCE_MANUAL,
     SETPOINT_TYPE_USER,
     TRV_AVAILABILITY_TIMEOUT,
     WINDOW_OPEN_DETECTED,
+    Z2M_ATTR_LOAD_ROOM_MEAN,
 )
-
-from .backend import DanfossBackend, TRVState
-from .backend.z2m import Z2MBackend
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -60,6 +64,14 @@ class ExtTempTRVState:
     last_temp_sent: float | None = None
     last_send_time: float = 0.0
     timer: CALLBACK_TYPE | None = None  # per-TRV max-interval resend timer
+
+
+@dataclass
+class LoadEstimateEntry:
+    """A timestamped load estimate from a TRV."""
+
+    value: int
+    timestamp: float  # time.monotonic()
 
 
 @dataclass
@@ -123,6 +135,10 @@ class RoomCoordinator:
         self._ext_temp_trv: dict[str, ExtTempTRVState] = {
             trv_id: ExtTempTRVState() for trv_id in self._trv_ids
         }
+
+        # Load balancing tracking
+        self._load_estimates: dict[str, LoadEstimateEntry] = {}
+        self._load_balance_timer: CALLBACK_TYPE | None = None
 
         # Setpoint coordination
         self._setpoint_lock = asyncio.Lock()
@@ -220,6 +236,10 @@ class RoomCoordinator:
             self._unsub_callbacks.append(unsub)
             await self._async_update_heat_availability()
 
+        # Start load balancing timer (only for multi-TRV rooms)
+        if len(self._trv_ids) > 1:
+            self._schedule_load_balance()
+
     async def async_teardown(self) -> None:
         """Tear down the room coordinator."""
         _LOGGER.info("Tearing down room coordinator for '%s'", self._room_name)
@@ -271,6 +291,25 @@ class RoomCoordinator:
         # Update per-TRV radiator_covered from TRV-reported state
         if trv_state.radiator_covered is not None:
             self._ext_temp_trv[trv_id].covered = trv_state.radiator_covered
+
+        # Update load estimate tracking
+        if trv_state.load_estimate is not None:
+            self._load_estimates[trv_id] = LoadEstimateEntry(
+                value=trv_state.load_estimate,
+                timestamp=time.monotonic(),
+            )
+
+        # Seed load_room_mean from TRV-reported value if the coordinator
+        # hasn't computed its own yet.
+        if self.state.load_room_mean is None and len(self._trv_ids) > 1:
+            raw_mean = trv_state.raw.get(Z2M_ATTR_LOAD_ROOM_MEAN)
+            if isinstance(raw_mean, int | float):
+                self.state.load_room_mean = int(raw_mean)
+                _LOGGER.debug(
+                    "Seeded load_room_mean from TRV %s: %d",
+                    trv_id,
+                    self.state.load_room_mean,
+                )
 
         # Check for setpoint coordination (manual dial change)
         if old_state is not None:
@@ -608,4 +647,90 @@ class RoomCoordinator:
                 self._programmatic_setpoint = False
 
         self.state.target_temperature = temperature
+        self._notify_state_update()
+
+    # ── Load Balancing ─────────────────────────────────────────────────
+
+    def _schedule_load_balance(self) -> None:
+        """Schedule the next load balance cycle."""
+
+        @callback
+        def _run_load_balance(_now: Any) -> None:
+            self._load_balance_timer = None
+            self.hass.async_create_task(self._async_run_load_balance())
+            self._schedule_load_balance()
+
+        self._load_balance_timer = async_call_later(
+            self.hass, LOAD_BALANCE_INTERVAL, _run_load_balance
+        )
+
+    async def _async_run_load_balance(self) -> None:
+        """Execute one load balancing cycle.
+
+        Per Danfoss spec:
+        - Collect load_estimate from all TRVs
+        - Discard values < -500 or == -8000
+        - Discard values older than 90 minutes
+        - Calculate mean of valid values
+        - Write load_room_mean to all TRVs
+        - Skip for single-TRV rooms
+        """
+        if len(self._trv_ids) <= 1:
+            return
+
+        now = time.monotonic()
+        valid_estimates: list[int] = []
+
+        for trv_id in self._trv_ids:
+            entry = self._load_estimates.get(trv_id)
+            if entry is None:
+                continue
+
+            # Check age
+            age = now - entry.timestamp
+            if age > LOAD_BALANCE_MAX_AGE:
+                _LOGGER.debug(
+                    "Discarding stale load estimate from %s (age: %.0fs)",
+                    trv_id,
+                    age,
+                )
+                continue
+
+            # Check validity
+            if entry.value == LOAD_BALANCE_DISABLED_VALUE:
+                continue
+            if entry.value < LOAD_BALANCE_INVALID_THRESHOLD:
+                _LOGGER.debug(
+                    "Discarding invalid load estimate from %s: %d",
+                    trv_id,
+                    entry.value,
+                )
+                continue
+
+            valid_estimates.append(entry.value)
+
+        if not valid_estimates:
+            _LOGGER.debug(
+                "No valid load estimates for room '%s', skipping", self._room_name
+            )
+            return
+
+        # Calculate mean
+        room_mean = round(sum(valid_estimates) / len(valid_estimates))
+        self.state.load_room_mean = room_mean
+
+        _LOGGER.debug(
+            "Load balance for room '%s': mean=%d (from %d TRVs)",
+            self._room_name,
+            room_mean,
+            len(valid_estimates),
+        )
+
+        # Write to all TRVs
+        for trv_id in self._trv_ids:
+            try:
+                await self._backend.async_set_load_room_mean(trv_id, room_mean)
+            except Exception:  # noqa: BLE001
+                _LOGGER.exception("Failed to set load_room_mean on TRV %s", trv_id)
+
         self._notify_state_update()
