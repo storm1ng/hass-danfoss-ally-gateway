@@ -399,3 +399,121 @@ def schedules_match(
                 return False
 
     return True
+
+
+# ── HA schedule entity day name mapping ────────────────────────────────
+# HA schedule helper uses lowercase English day names; ZCL uses 0=Sunday..6=Saturday.
+_HA_DAY_TO_INDEX: dict[str, int] = {
+    "sun": 0,
+    "mon": 1,
+    "tue": 2,
+    "wed": 3,
+    "thu": 4,
+    "fri": 5,
+    "sat": 6,
+}
+
+# Minimum at-home block duration in minutes
+MIN_BLOCK_DURATION: int = 30
+
+# Maximum at-home blocks per day (= 3 → 6 transitions)
+MAX_BLOCKS_PER_DAY: int = 3
+
+
+def _time_str_to_minutes(time_str: str) -> int:
+    """Convert 'HH:MM:SS' or 'HH:MM' to minutes since midnight."""
+    parts = time_str.split(":")
+    return int(parts[0]) * 60 + int(parts[1])
+
+
+def from_ha_schedule(
+    schedule_data: list[dict[str, Any]],
+    at_home_temp: float,
+    away_temp: float,
+) -> WeeklySchedule:
+    """Convert HA schedule helper data to a WeeklySchedule.
+
+    Args:
+        schedule_data: List of schedule block dicts from the HA schedule
+            entity's schedule attribute. Each block has keys:
+            - "from": start time "HH:MM:SS"
+            - "to": end time "HH:MM:SS"
+            - "days": list of day abbreviations (e.g. ["mon", "tue"])
+        at_home_temp: Temperature for "at home" (on) periods.
+        away_temp: Temperature for "away" (off) periods.
+
+    Returns:
+        A WeeklySchedule with transitions derived from the on/off blocks.
+
+    Raises:
+        ValueError: If blocks exceed max per day or are too short.
+    """
+    # Collect blocks per day
+    day_blocks: dict[int, list[tuple[int, int]]] = {i: [] for i in range(7)}
+
+    for block in schedule_data:
+        from_min = _time_str_to_minutes(block["from"])
+        to_min = _time_str_to_minutes(block["to"])
+        days = block.get("days", [])
+
+        for day_abbr in days:
+            day_idx = _HA_DAY_TO_INDEX.get(day_abbr.lower())
+            if day_idx is not None:
+                day_blocks[day_idx].append((from_min, to_min))
+
+    schedule = WeeklySchedule()
+
+    for day_idx in range(7):
+        blocks = sorted(day_blocks[day_idx])
+
+        if not blocks:
+            continue
+
+        if len(blocks) > MAX_BLOCKS_PER_DAY:
+            day_names = [
+                "Sunday",
+                "Monday",
+                "Tuesday",
+                "Wednesday",
+                "Thursday",
+                "Friday",
+                "Saturday",
+            ]
+            raise ValueError(
+                f"{day_names[day_idx]}: {len(blocks)} at-home blocks "
+                f"exceeds maximum of {MAX_BLOCKS_PER_DAY}"
+            )
+
+        events: list[ScheduleEvent] = []
+        for from_min, to_min in blocks:
+            duration = to_min - from_min
+            if duration < MIN_BLOCK_DURATION:
+                day_names = [
+                    "Sunday",
+                    "Monday",
+                    "Tuesday",
+                    "Wednesday",
+                    "Thursday",
+                    "Friday",
+                    "Saturday",
+                ]
+                raise ValueError(
+                    f"{day_names[day_idx]}: block {from_min}-{to_min} "
+                    f"is {duration} minutes (minimum {MIN_BLOCK_DURATION})"
+                )
+            events.append(
+                ScheduleEvent(
+                    minutes_since_midnight=from_min,
+                    temperature=at_home_temp,
+                )
+            )
+            events.append(
+                ScheduleEvent(
+                    minutes_since_midnight=to_min,
+                    temperature=away_temp,
+                )
+            )
+
+        schedule.days[day_idx] = DaySchedule(events=sorted(events))
+
+    return schedule

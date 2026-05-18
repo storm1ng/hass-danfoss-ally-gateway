@@ -17,6 +17,7 @@ from custom_components.danfoss_ally_gateway.schedule import (
     WeeklySchedule,
     apply_midnight_crossing,
     build_zcl_set_weekly_payloads,
+    from_ha_schedule,
     parse_zcl_get_weekly_response,
     schedules_match,
 )
@@ -569,3 +570,92 @@ class TestSchedulesMatch:
         ws2 = WeeklySchedule()
         ws2.days[3] = DaySchedule(events=[ScheduleEvent(360, 21.0)])
         assert not schedules_match(ws1, ws2)
+
+
+# ── from_ha_schedule ──────────────────────────────────────────────────
+
+
+class TestFromHaSchedule:
+    """Tests for converting HA schedule helper data to WeeklySchedule."""
+
+    def test_single_block_single_day(self):
+        """One at-home block on Monday."""
+        blocks = [
+            {"from": "06:00:00", "to": "08:00:00", "days": ["mon"]},
+        ]
+        schedule = from_ha_schedule(blocks, at_home_temp=21.0, away_temp=17.0)
+
+        # Monday = day index 1
+        assert len(schedule.days[1].events) == 2
+        assert schedule.days[1].events[0] == ScheduleEvent(360, 21.0)
+        assert schedule.days[1].events[1] == ScheduleEvent(480, 17.0)
+
+        # Other days should be empty
+        for i in [0, 2, 3, 4, 5, 6]:
+            assert schedule.days[i].is_empty
+
+    def test_multiple_blocks_single_day(self):
+        """Two at-home blocks on Monday."""
+        blocks = [
+            {"from": "06:00:00", "to": "08:00:00", "days": ["mon"]},
+            {"from": "16:00:00", "to": "22:00:00", "days": ["mon"]},
+        ]
+        schedule = from_ha_schedule(blocks, at_home_temp=21.0, away_temp=17.0)
+
+        assert len(schedule.days[1].events) == 4
+        assert schedule.days[1].events[0] == ScheduleEvent(360, 21.0)
+        assert schedule.days[1].events[1] == ScheduleEvent(480, 17.0)
+        assert schedule.days[1].events[2] == ScheduleEvent(960, 21.0)
+        assert schedule.days[1].events[3] == ScheduleEvent(1320, 17.0)
+
+    def test_block_across_multiple_days(self):
+        """One block applied to Mon-Fri."""
+        blocks = [
+            {
+                "from": "07:00:00",
+                "to": "09:00:00",
+                "days": ["mon", "tue", "wed", "thu", "fri"],
+            },
+        ]
+        schedule = from_ha_schedule(blocks, at_home_temp=22.0, away_temp=18.0)
+
+        for day_idx in [1, 2, 3, 4, 5]:  # Mon-Fri
+            assert len(schedule.days[day_idx].events) == 2
+            assert schedule.days[day_idx].events[0] == ScheduleEvent(420, 22.0)
+            assert schedule.days[day_idx].events[1] == ScheduleEvent(540, 18.0)
+
+        # Weekend should be empty
+        assert schedule.days[0].is_empty  # Sunday
+        assert schedule.days[6].is_empty  # Saturday
+
+    def test_too_many_blocks_raises(self):
+        """More than 3 blocks on a day should raise ValueError."""
+        blocks = [
+            {"from": "06:00:00", "to": "07:00:00", "days": ["mon"]},
+            {"from": "08:00:00", "to": "09:00:00", "days": ["mon"]},
+            {"from": "10:00:00", "to": "11:00:00", "days": ["mon"]},
+            {"from": "12:00:00", "to": "13:00:00", "days": ["mon"]},
+        ]
+        with pytest.raises(ValueError, match="exceeds maximum"):
+            from_ha_schedule(blocks, at_home_temp=21.0, away_temp=17.0)
+
+    def test_block_too_short_raises(self):
+        """Block shorter than 30 minutes should raise ValueError."""
+        blocks = [
+            {"from": "06:00:00", "to": "06:20:00", "days": ["mon"]},
+        ]
+        with pytest.raises(ValueError, match="minimum"):
+            from_ha_schedule(blocks, at_home_temp=21.0, away_temp=17.0)
+
+    def test_empty_schedule(self):
+        """No blocks should produce empty schedule."""
+        schedule = from_ha_schedule([], at_home_temp=21.0, away_temp=17.0)
+        assert schedule.is_empty
+
+    def test_time_without_seconds(self):
+        """Time strings without seconds should work."""
+        blocks = [
+            {"from": "06:00", "to": "08:00", "days": ["sun"]},
+        ]
+        schedule = from_ha_schedule(blocks, at_home_temp=21.0, away_temp=17.0)
+        assert len(schedule.days[0].events) == 2
