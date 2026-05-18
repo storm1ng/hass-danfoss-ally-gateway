@@ -9,6 +9,10 @@ Implements per-room coordination logic:
 - Load balancing (15-minute cycle)
 - Window open coordination (force external_window_open on other TRVs)
 - Preheat coordination (forward preheat commands to other TRVs)
+- Remote climate sync (bidirectional setpoint sync with anti-echo)
+- Weekly time synchronization
+- Schedule programming and mode control
+- Schedule entity watcher (auto-program from HA schedule helpers)
 """
 
 import asyncio
@@ -35,12 +39,18 @@ from homeassistant.helpers.event import (
 from .backend import DanfossBackend, TRVState
 from .backend.z2m import Z2MBackend
 from .const import (
+    CONF_AT_HOME_TEMP,
+    CONF_AWAY_TEMP,
     CONF_HEAT_SOURCE,
     CONF_HEAT_SOURCE_TYPE,
+    CONF_PREHEAT_ENABLED,
     CONF_REMOTE_CLIMATE,
     CONF_ROOM_NAME,
+    CONF_SCHEDULE_ENTITY,
     CONF_TEMP_SENSOR,
     CONF_TRV_ENTITIES,
+    DEFAULT_AT_HOME_TEMP,
+    DEFAULT_AWAY_TEMP,
     EXT_TEMP_CHANGE_THRESHOLD,
     EXT_TEMP_COVERED_MAX_INTERVAL,
     EXT_TEMP_COVERED_MIN_INTERVAL,
@@ -73,6 +83,7 @@ from .schedule import (
     WeeklySchedule,
     apply_midnight_crossing,
     build_zcl_set_weekly_payloads,
+    from_ha_schedule,
     parse_zcl_get_weekly_response,
     schedules_match,
 )
@@ -143,6 +154,12 @@ class RoomCoordinator:
         self._heat_source_id: str = subentry_data.get(CONF_HEAT_SOURCE, "")
         self._heat_source_type: str = subentry_data.get(CONF_HEAT_SOURCE_TYPE, "")
         self._remote_climate_id: str = subentry_data.get(CONF_REMOTE_CLIMATE, "")
+        self._schedule_entity_id: str = subentry_data.get(CONF_SCHEDULE_ENTITY, "")
+        self._at_home_temp: float = subentry_data.get(
+            CONF_AT_HOME_TEMP, DEFAULT_AT_HOME_TEMP
+        )
+        self._away_temp: float = subentry_data.get(CONF_AWAY_TEMP, DEFAULT_AWAY_TEMP)
+        self._preheat_enabled: bool = subentry_data.get(CONF_PREHEAT_ENABLED, True)
 
         # Current room state
         self.state = RoomState(room_name=self._room_name)
@@ -283,6 +300,18 @@ class RoomCoordinator:
                 self._handle_remote_climate_change,
             )
             self._unsub_callbacks.append(unsub)
+
+        # Listen to schedule helper entity for schedule updates
+        if self._schedule_entity_id:
+            unsub = async_track_state_change_event(
+                self.hass,
+                [self._schedule_entity_id],
+                self._handle_schedule_entity_change,
+            )
+            self._unsub_callbacks.append(unsub)
+
+            # Program initial schedule from the helper entity
+            await self._async_sync_schedule_from_entity()
 
         # Schedule weekly time sync
         self._schedule_time_sync()
@@ -1000,6 +1029,102 @@ class RoomCoordinator:
                 await self._backend.async_sync_time(trv_id)
             except Exception:  # noqa: BLE001
                 _LOGGER.exception("Failed to sync time to TRV %s", trv_id)
+
+    # ── Schedule Entity Watcher ────────────────────────────────────────
+
+    def _handle_schedule_entity_change(
+        self, event: Event[EventStateChangedData]
+    ) -> None:
+        """Handle schedule helper entity state change.
+
+        When the schedule entity's state or attributes change, re-read
+        the schedule and re-program to TRVs.
+        """
+        new_state = event.data.get("new_state")
+        if new_state is None or new_state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
+            return
+
+        self.hass.async_create_task(self._async_sync_schedule_from_entity())
+
+    async def _async_sync_schedule_from_entity(self) -> None:
+        """Read the HA schedule helper entity and program to TRVs.
+
+        Reads the schedule entity's 'schedule' attribute, converts to
+        a WeeklySchedule using the configured at-home/away temperatures,
+        and programs it to all TRVs.
+        """
+        if not self._schedule_entity_id:
+            return
+
+        state = self.hass.states.get(self._schedule_entity_id)
+        if state is None or state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
+            _LOGGER.debug(
+                "Schedule entity %s unavailable for room '%s'",
+                self._schedule_entity_id,
+                self._room_name,
+            )
+            return
+
+        # HA schedule helper exposes schedule blocks via the 'schedule' attribute
+        # as a list of dicts with "from", "to", "days" keys.
+        schedule_blocks = state.attributes.get("schedule")
+        if not schedule_blocks:
+            _LOGGER.debug(
+                "No schedule blocks in %s for room '%s'",
+                self._schedule_entity_id,
+                self._room_name,
+            )
+            return
+
+        try:
+            schedule = from_ha_schedule(
+                schedule_blocks, self._at_home_temp, self._away_temp
+            )
+        except ValueError as err:
+            _LOGGER.error(
+                "Failed to convert schedule from %s for room '%s': %s",
+                self._schedule_entity_id,
+                self._room_name,
+                err,
+            )
+            return
+
+        if schedule.is_empty:
+            _LOGGER.debug(
+                "Empty schedule from %s for room '%s', skipping",
+                self._schedule_entity_id,
+                self._room_name,
+            )
+            return
+
+        _LOGGER.info(
+            "Syncing schedule from %s to room '%s' (%d events, "
+            "at_home=%.1f°C, away=%.1f°C)",
+            self._schedule_entity_id,
+            self._room_name,
+            schedule.total_events,
+            self._at_home_temp,
+            self._away_temp,
+        )
+
+        try:
+            await self.async_program_schedule(schedule)
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception(
+                "Failed to program schedule from entity %s for room '%s'",
+                self._schedule_entity_id,
+                self._room_name,
+            )
+            return
+
+        # Set programming mode based on preheat config
+        mode = (
+            SCHEDULE_MODE_SCHEDULE_PREHEAT
+            if self._preheat_enabled
+            else SCHEDULE_MODE_SCHEDULE
+        )
+        if self._schedule_mode != mode:
+            await self.async_set_programming_mode_value(mode)
 
     # ── Programming Mode Control ───────────────────────────────────────
 

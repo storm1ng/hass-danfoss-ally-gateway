@@ -50,7 +50,11 @@
                         "temperature_sensor": "External temperature sensor",
                         "heat_source_type": "Heat source type",
                         "heat_source": "Heat source entity",
-                        "remote_climate": "Remote climate"
+                        "remote_climate": "Remote climate",
+                        "schedule_entity": "Schedule helper",
+                        "at_home_temperature": "At-home temperature",
+                        "away_temperature": "Away temperature",
+                        "preheat_enabled": "Enable preheat"
                     },
                     "data_description": {
                         "trv_entities": "Select the Danfoss Ally, Popp, or Hive TRV devices for this room.",
@@ -58,7 +62,11 @@
                         "temperature_sensor": "An external temperature sensor entity to use instead of the TRV's built-in sensor. Can be any HA temperature sensor.",
                         "heat_source_type": "How to determine if the heating system is active.",
                         "heat_source": "The climate or binary sensor entity representing your heating system.",
-                        "remote_climate": "A climate entity to sync setpoints with TRVs in this room. When a TRV setpoint changes, the remote climate is updated, and vice versa."
+                        "remote_climate": "A climate entity to sync setpoints with TRVs in this room. When a TRV setpoint changes, the remote climate is updated, and vice versa.",
+                        "schedule_entity": "A schedule helper entity defining at-home time periods. 'On' blocks = at home, 'off' = away.",
+                        "at_home_temperature": "Target temperature during at-home periods.",
+                        "away_temperature": "Target temperature during away periods.",
+                        "preheat_enabled": "When enabled, TRVs start heating before a scheduled temperature increase to reach the target on time."
                     }
                 },
                 "reconfigure": {
@@ -71,7 +79,11 @@
                         "temperature_sensor": "External temperature sensor",
                         "heat_source_type": "Heat source type",
                         "heat_source": "Heat source entity",
-                        "remote_climate": "Remote climate"
+                        "remote_climate": "Remote climate",
+                        "schedule_entity": "Schedule helper",
+                        "at_home_temperature": "At-home temperature",
+                        "away_temperature": "Away temperature",
+                        "preheat_enabled": "Enable preheat"
                     },
                     "data_description": {
                         "trv_entities": "Select the Danfoss Ally, Popp, or Hive TRV devices for this room.",
@@ -79,7 +91,11 @@
                         "temperature_sensor": "An external temperature sensor entity to use instead of the TRV's built-in sensor.",
                         "heat_source_type": "How to determine if the heating system is active.",
                         "heat_source": "The climate or binary sensor entity representing your heating system.",
-                        "remote_climate": "A climate entity to sync setpoints with TRVs in this room. When a TRV setpoint changes, the remote climate is updated, and vice versa."
+                        "remote_climate": "A climate entity to sync setpoints with TRVs in this room. When a TRV setpoint changes, the remote climate is updated, and vice versa.",
+                        "schedule_entity": "A schedule helper entity defining at-home time periods. 'On' blocks = at home, 'off' = away.",
+                        "at_home_temperature": "Target temperature during at-home periods.",
+                        "away_temperature": "Target temperature during away periods.",
+                        "preheat_enabled": "When enabled, TRVs start heating before a scheduled temperature increase to reach the target on time."
                     }
                 }
             },

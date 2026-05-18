@@ -10,14 +10,20 @@ import pytest
 from custom_components.danfoss_ally_gateway.backend import DanfossBackend, TRVState
 from custom_components.danfoss_ally_gateway.const import (
     BACKEND_Z2M,
+    CONF_AT_HOME_TEMP,
+    CONF_AWAY_TEMP,
     CONF_BACKEND,
     CONF_HEAT_SOURCE,
     CONF_HEAT_SOURCE_TYPE,
     CONF_MQTT_BASE_TOPIC,
+    CONF_PREHEAT_ENABLED,
     CONF_REMOTE_CLIMATE,
     CONF_ROOM_NAME,
+    CONF_SCHEDULE_ENTITY,
     CONF_TEMP_SENSOR,
     CONF_TRV_ENTITIES,
+    DEFAULT_AT_HOME_TEMP,
+    DEFAULT_AWAY_TEMP,
 )
 from custom_components.danfoss_ally_gateway.coordinator import RoomCoordinator
 
@@ -139,6 +145,10 @@ def make_subentry_data(
     heat_source: str = "",
     heat_source_type: str = "",
     remote_climate: str = "",
+    schedule_entity: str = "",
+    at_home_temp: float = DEFAULT_AT_HOME_TEMP,
+    away_temp: float = DEFAULT_AWAY_TEMP,
+    preheat_enabled: bool = True,
 ) -> dict[str, Any]:
     """Build a subentry data dict for creating a RoomCoordinator."""
     return {
@@ -148,6 +158,10 @@ def make_subentry_data(
         CONF_HEAT_SOURCE: heat_source,
         CONF_HEAT_SOURCE_TYPE: heat_source_type,
         CONF_REMOTE_CLIMATE: remote_climate,
+        CONF_SCHEDULE_ENTITY: schedule_entity,
+        CONF_AT_HOME_TEMP: at_home_temp,
+        CONF_AWAY_TEMP: away_temp,
+        CONF_PREHEAT_ENABLED: preheat_enabled,
     }
 
 

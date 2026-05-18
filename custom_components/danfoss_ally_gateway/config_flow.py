@@ -23,14 +23,20 @@ from .const import (
     BACKEND_Z2M,
     BACKEND_ZHA,
     CONF_AREA,
+    CONF_AT_HOME_TEMP,
+    CONF_AWAY_TEMP,
     CONF_BACKEND,
     CONF_HEAT_SOURCE,
     CONF_HEAT_SOURCE_TYPE,
     CONF_MQTT_BASE_TOPIC,
+    CONF_PREHEAT_ENABLED,
     CONF_REMOTE_CLIMATE,
     CONF_ROOM_NAME,
+    CONF_SCHEDULE_ENTITY,
     CONF_TEMP_SENSOR,
     CONF_TRV_ENTITIES,
+    DEFAULT_AT_HOME_TEMP,
+    DEFAULT_AWAY_TEMP,
     DOMAIN,
     HEAT_SOURCE_BINARY_SENSOR,
     HEAT_SOURCE_CLIMATE,
@@ -252,6 +258,16 @@ class RoomSubentryFlowHandler(ConfigSubentryFlow):
                             CONF_HEAT_SOURCE_TYPE, ""
                         ),
                         CONF_REMOTE_CLIMATE: user_input.get(CONF_REMOTE_CLIMATE, ""),
+                        CONF_SCHEDULE_ENTITY: user_input.get(CONF_SCHEDULE_ENTITY, ""),
+                        CONF_AT_HOME_TEMP: user_input.get(
+                            CONF_AT_HOME_TEMP, DEFAULT_AT_HOME_TEMP
+                        ),
+                        CONF_AWAY_TEMP: user_input.get(
+                            CONF_AWAY_TEMP, DEFAULT_AWAY_TEMP
+                        ),
+                        CONF_PREHEAT_ENABLED: user_input.get(
+                            CONF_PREHEAT_ENABLED, True
+                        ),
                     },
                 )
 
@@ -289,6 +305,36 @@ class RoomSubentryFlowHandler(ConfigSubentryFlow):
                             domain="climate",
                         )
                     ),
+                    vol.Optional(CONF_SCHEDULE_ENTITY): selector.EntitySelector(
+                        selector.EntitySelectorConfig(
+                            domain="schedule",
+                        )
+                    ),
+                    vol.Optional(
+                        CONF_AT_HOME_TEMP, default=DEFAULT_AT_HOME_TEMP
+                    ): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=5.0,
+                            max=35.0,
+                            step=0.5,
+                            unit_of_measurement="°C",
+                            mode=selector.NumberSelectorMode.BOX,
+                        )
+                    ),
+                    vol.Optional(
+                        CONF_AWAY_TEMP, default=DEFAULT_AWAY_TEMP
+                    ): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=5.0,
+                            max=35.0,
+                            step=0.5,
+                            unit_of_measurement="°C",
+                            mode=selector.NumberSelectorMode.BOX,
+                        )
+                    ),
+                    vol.Optional(
+                        CONF_PREHEAT_ENABLED, default=True
+                    ): selector.BooleanSelector(),
                 }
             ),
             errors=errors,
@@ -325,6 +371,16 @@ class RoomSubentryFlowHandler(ConfigSubentryFlow):
                             CONF_HEAT_SOURCE_TYPE, ""
                         ),
                         CONF_REMOTE_CLIMATE: user_input.get(CONF_REMOTE_CLIMATE, ""),
+                        CONF_SCHEDULE_ENTITY: user_input.get(CONF_SCHEDULE_ENTITY, ""),
+                        CONF_AT_HOME_TEMP: user_input.get(
+                            CONF_AT_HOME_TEMP, DEFAULT_AT_HOME_TEMP
+                        ),
+                        CONF_AWAY_TEMP: user_input.get(
+                            CONF_AWAY_TEMP, DEFAULT_AWAY_TEMP
+                        ),
+                        CONF_PREHEAT_ENABLED: user_input.get(
+                            CONF_PREHEAT_ENABLED, True
+                        ),
                     },
                 )
 
@@ -389,6 +445,44 @@ class RoomSubentryFlowHandler(ConfigSubentryFlow):
                             domain="climate",
                         )
                     ),
+                    vol.Optional(
+                        CONF_SCHEDULE_ENTITY,
+                        description={
+                            "suggested_value": existing.get(CONF_SCHEDULE_ENTITY, "")
+                        },
+                    ): selector.EntitySelector(
+                        selector.EntitySelectorConfig(
+                            domain="schedule",
+                        )
+                    ),
+                    vol.Optional(
+                        CONF_AT_HOME_TEMP,
+                        default=existing.get(CONF_AT_HOME_TEMP, DEFAULT_AT_HOME_TEMP),
+                    ): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=5.0,
+                            max=35.0,
+                            step=0.5,
+                            unit_of_measurement="°C",
+                            mode=selector.NumberSelectorMode.BOX,
+                        )
+                    ),
+                    vol.Optional(
+                        CONF_AWAY_TEMP,
+                        default=existing.get(CONF_AWAY_TEMP, DEFAULT_AWAY_TEMP),
+                    ): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=5.0,
+                            max=35.0,
+                            step=0.5,
+                            unit_of_measurement="°C",
+                            mode=selector.NumberSelectorMode.BOX,
+                        )
+                    ),
+                    vol.Optional(
+                        CONF_PREHEAT_ENABLED,
+                        default=existing.get(CONF_PREHEAT_ENABLED, True),
+                    ): selector.BooleanSelector(),
                 }
             ),
             errors=errors,

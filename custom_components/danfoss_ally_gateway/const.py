@@ -23,9 +23,17 @@ CONF_TEMP_SENSOR: Final = "temperature_sensor"
 CONF_HEAT_SOURCE: Final = "heat_source"
 CONF_HEAT_SOURCE_TYPE: Final = "heat_source_type"
 CONF_REMOTE_CLIMATE: Final = "remote_climate"
+CONF_SCHEDULE_ENTITY: Final = "schedule_entity"
+CONF_AT_HOME_TEMP: Final = "at_home_temperature"
+CONF_AWAY_TEMP: Final = "away_temperature"
+CONF_PREHEAT_ENABLED: Final = "preheat_enabled"
 
 HEAT_SOURCE_CLIMATE: Final = "climate"
 HEAT_SOURCE_BINARY_SENSOR: Final = "binary_sensor"
+
+# ── Default schedule temperatures ──────────────────────────────────────
+DEFAULT_AT_HOME_TEMP: Final = 21.0
+DEFAULT_AWAY_TEMP: Final = 17.0
 
 # ── Subentry types ─────────────────────────────────────────────────────
 SUBENTRY_ROOM: Final = "room"
