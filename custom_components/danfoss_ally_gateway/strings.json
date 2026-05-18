@@ -117,5 +117,16 @@
         "load_room_mean": {
             "name": "{room_name} Load Room Mean"
         }
+    },
+    "select": {
+        "programming_mode": {
+            "name": "{room_name} Programming Mode",
+            "state": {
+                "manual": "Manual",
+                "schedule": "Schedule",
+                "schedule_with_preheat": "Schedule + Preheat",
+                "pause": "Pause"
+            }
+        }
     }
 }

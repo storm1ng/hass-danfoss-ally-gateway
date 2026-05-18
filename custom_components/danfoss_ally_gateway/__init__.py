@@ -143,12 +143,14 @@ async def async_setup_subentry(
 
     from .binary_sensor import create_room_entities as create_binary_sensor_entities
     from .climate import create_room_entities as create_climate_entities
+    from .select import create_room_entities as create_select_entities
     from .sensor import create_room_entities as create_sensor_entities
 
     creators = {
         "climate": create_climate_entities,
         "binary_sensor": create_binary_sensor_entities,
         "sensor": create_sensor_entities,
+        "select": create_select_entities,
     }
 
     for platform, creator in creators.items():
