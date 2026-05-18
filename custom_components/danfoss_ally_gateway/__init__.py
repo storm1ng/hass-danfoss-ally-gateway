@@ -13,10 +13,8 @@ from homeassistant.config_entries import ConfigEntry, ConfigSubentry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 
-from custom_components.danfoss_ally_gateway.backend import DanfossBackend
-from custom_components.danfoss_ally_gateway.backend.z2m import Z2MBackend
-from custom_components.danfoss_ally_gateway.coordinator import RoomCoordinator
-
+from .backend import DanfossBackend
+from .backend.z2m import Z2MBackend
 from .const import (
     BACKEND_Z2M,
     CONF_AREA,
@@ -26,6 +24,8 @@ from .const import (
     PLATFORMS,
     SUBENTRY_ROOM,
 )
+from .coordinator import RoomCoordinator
+from .services import async_register_services, async_unregister_services
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -87,6 +87,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             if area_id:
                 _assign_room_area(hass, entry.entry_id, subentry_id, area_id)
 
+    # Register schedule management services
+    async_register_services(hass)
+
     return True
 
 
@@ -109,6 +112,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         backend: DanfossBackend | None = entry_data.get("backend")
         if backend is not None:
             await backend.async_teardown()
+
+        # Unregister services if no other entries remain
+        async_unregister_services(hass)
 
     return unload_ok
 

@@ -1,0 +1,94 @@
+set_room_schedule:
+  name: Set room schedule
+  description: >-
+    Program a weekly heating schedule to all TRVs in a room. Each day can have
+    up to 6 transition events. The schedule is volatile on Danfoss TRVs and
+    will be automatically re-programmed after power cycle detection.
+  fields:
+    config_entry_id:
+      name: Config entry ID
+      description: The config entry ID of the Danfoss Ally Gateway integration instance.
+      required: true
+      selector:
+        text:
+    subentry_id:
+      name: Room subentry ID
+      description: The subentry ID identifying the room to program.
+      required: true
+      selector:
+        text:
+    schedule:
+      name: Schedule
+      description: >-
+        Weekly schedule as a JSON object with a "days" key. Days is a list of
+        7 arrays (Sunday through Saturday), each containing up to 6 events.
+        Each event is an object with "time" (minutes since midnight, 0-1439)
+        and "temp" (temperature in Celsius). Example:
+        {"days": [[{"time": 360, "temp": 21.0}, {"time": 1320, "temp": 18.0}], ...]}
+      required: true
+      selector:
+        object:
+
+clear_room_schedule:
+  name: Clear room schedule
+  description: >-
+    Clear the weekly heating schedule from all TRVs in a room and set them
+    to manual mode.
+  fields:
+    config_entry_id:
+      name: Config entry ID
+      description: The config entry ID of the Danfoss Ally Gateway integration instance.
+      required: true
+      selector:
+        text:
+    subentry_id:
+      name: Room subentry ID
+      description: The subentry ID identifying the room to clear.
+      required: true
+      selector:
+        text:
+
+set_schedule_mode:
+  name: Set schedule mode
+  description: >-
+    Set the thermostat programming operation mode for all TRVs in a room.
+    Controls whether the TRVs follow the programmed schedule or operate
+    in manual mode, and whether preheat is enabled.
+  fields:
+    config_entry_id:
+      name: Config entry ID
+      description: The config entry ID of the Danfoss Ally Gateway integration instance.
+      required: true
+      selector:
+        text:
+    subentry_id:
+      name: Room subentry ID
+      description: The subentry ID identifying the room.
+      required: true
+      selector:
+        text:
+    enabled:
+      name: Schedule enabled
+      description: True to enable schedule mode, false for manual mode.
+      required: true
+      selector:
+        boolean:
+    preheat:
+      name: Preheat enabled
+      description: >-
+        True to enable preheat (only effective when schedule is enabled).
+        When enabled, the TRV will start heating before a scheduled
+        temperature increase to reach the target on time.
+      required: false
+      default: false
+      selector:
+        boolean:
+    eco:
+      name: Eco / Pause mode
+      description: >-
+        True to enable eco (pause) mode. Overrides the enabled and preheat
+        settings. In eco mode the TRV holds the away / minimum temperature.
+      required: false
+      default: false
+      selector:
+        boolean:
