@@ -69,6 +69,27 @@ SCHEDULE_MAX_DAILY_TRANSITIONS: Final = 6
 SCHEDULE_MAX_WEEKLY_TRANSITIONS: Final = 42  # 7 × 6
 SCHEDULE_MINUTES_PER_DAY: Final = 1440  # 24 × 60
 
+# ── Schedule ZCL constants ─────────────────────────────────────────────
+SCHEDULE_DOW_SUNDAY: Final = 0x01
+SCHEDULE_DOW_MONDAY: Final = 0x02
+SCHEDULE_DOW_TUESDAY: Final = 0x04
+SCHEDULE_DOW_WEDNESDAY: Final = 0x08
+SCHEDULE_DOW_THURSDAY: Final = 0x10
+SCHEDULE_DOW_FRIDAY: Final = 0x20
+SCHEDULE_DOW_SATURDAY: Final = 0x40
+
+SCHEDULE_DOW_ALL: Final = [
+    SCHEDULE_DOW_SUNDAY,
+    SCHEDULE_DOW_MONDAY,
+    SCHEDULE_DOW_TUESDAY,
+    SCHEDULE_DOW_WEDNESDAY,
+    SCHEDULE_DOW_THURSDAY,
+    SCHEDULE_DOW_FRIDAY,
+    SCHEDULE_DOW_SATURDAY,
+]
+
+SCHEDULE_MODE_HEAT: Final = 0x01
+
 # ── Setpoint command types ─────────────────────────────────────────────
 SETPOINT_TYPE_USER: Final = 1  # Aggressive motor response (manual dial change)
 
