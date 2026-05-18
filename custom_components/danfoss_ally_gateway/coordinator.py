@@ -53,7 +53,14 @@ from .const import (
     LOAD_BALANCE_INTERVAL,
     LOAD_BALANCE_INVALID_THRESHOLD,
     LOAD_BALANCE_MAX_AGE,
+    PROGRAMMING_MODE_FROM_INT,
+    PROGRAMMING_MODE_TO_INT,
     REMOTE_CLIMATE_SUPPRESS_SECONDS,
+    SCHEDULE_DOW_ALL,
+    SCHEDULE_MODE_ECO,
+    SCHEDULE_MODE_MANUAL,
+    SCHEDULE_MODE_SCHEDULE,
+    SCHEDULE_MODE_SCHEDULE_PREHEAT,
     SETPOINT_SOURCE_MANUAL,
     SETPOINT_TYPE_USER,
     TIME_SYNC_INTERVAL,
@@ -61,6 +68,13 @@ from .const import (
     WINDOW_OPEN_DETECTED,
     WINDOW_OPEN_EXTERNAL_OPEN,
     Z2M_ATTR_LOAD_ROOM_MEAN,
+)
+from .schedule import (
+    WeeklySchedule,
+    apply_midnight_crossing,
+    build_zcl_set_weekly_payloads,
+    parse_zcl_get_weekly_response,
+    schedules_match,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -165,6 +179,9 @@ class RoomCoordinator:
         self._remote_setpoint_suppress_until: float = 0.0  # monotonic timestamp
 
         self._time_sync_timer: CALLBACK_TYPE | None = None
+
+        self._current_schedule: WeeklySchedule | None = None  # Last programmed schedule
+        self._schedule_mode: int = SCHEDULE_MODE_MANUAL  # Current programming mode
 
     @property
     def room_name(self) -> str:
@@ -984,6 +1001,52 @@ class RoomCoordinator:
             except Exception:  # noqa: BLE001
                 _LOGGER.exception("Failed to sync time to TRV %s", trv_id)
 
+    # ── Programming Mode Control ───────────────────────────────────────
+
+    @property
+    def schedule_mode(self) -> int:
+        """Return the current programming mode integer value."""
+        return self._schedule_mode
+
+    @property
+    def schedule_mode_option(self) -> str:
+        """Return the current programming mode as a string option."""
+        return PROGRAMMING_MODE_FROM_INT.get(self._schedule_mode, "manual")
+
+    async def async_set_programming_mode_option(self, option: str) -> None:
+        """Set the programming mode from a string option.
+
+        Args:
+            option: One of "manual", "schedule", "schedule_with_preheat", "pause".
+        """
+        mode = PROGRAMMING_MODE_TO_INT.get(option)
+        if mode is None:
+            raise ValueError(f"Invalid programming mode option: {option}")
+        await self.async_set_programming_mode_value(mode)
+
+    async def async_set_programming_mode_value(self, mode: int) -> None:
+        """Set the programming mode by integer value on all TRVs."""
+        mode_name = PROGRAMMING_MODE_FROM_INT.get(mode, f"unknown({mode})")
+        _LOGGER.info(
+            "Setting programming mode for room '%s': %s (mode=%d)",
+            self._room_name,
+            mode_name,
+            mode,
+        )
+
+        for trv_id in self._trv_ids:
+            try:
+                await self._backend.async_set_programming_mode(trv_id, mode)
+            except Exception:  # noqa: BLE001
+                _LOGGER.exception(
+                    "Failed to set programming mode on TRV %s in room '%s'",
+                    trv_id,
+                    self._room_name,
+                )
+
+        self._schedule_mode = mode
+        self._notify_state_update()
+
     # ── Load Balancing ─────────────────────────────────────────────────
 
     def _schedule_load_balance(self) -> None:
@@ -1069,3 +1132,178 @@ class RoomCoordinator:
                 _LOGGER.exception("Failed to set load_room_mean on TRV %s", trv_id)
 
         self._notify_state_update()
+
+    # ── Schedule Programming ───────────────────────────────────────────
+
+    async def async_program_schedule(self, schedule: WeeklySchedule) -> None:
+        """Program a weekly schedule to all TRVs in the room.
+
+        Steps:
+        1. Validate the schedule.
+        2. Clear existing schedule on all TRVs.
+        3. Apply midnight crossing logic.
+        4. Build per-day ZCL payloads.
+        5. Send SetWeeklySchedule to each TRV for each day.
+        6. Read back schedule from first TRV for verification.
+        7. Store as current schedule.
+        """
+        # Validate
+        errors = schedule.validate()
+        if errors:
+            _LOGGER.error(
+                "Schedule validation failed for room '%s': %s",
+                self._room_name,
+                errors,
+            )
+            raise ValueError(f"Invalid schedule: {errors}")
+
+        _LOGGER.info(
+            "Programming schedule for room '%s' (%d total events)",
+            self._room_name,
+            schedule.total_events,
+        )
+
+        # Step 1: Clear existing schedule on all TRVs
+        for trv_id in self._trv_ids:
+            try:
+                await self._backend.async_clear_weekly_schedule(trv_id)
+            except Exception:  # noqa: BLE001
+                _LOGGER.exception(
+                    "Failed to clear schedule on TRV %s in room '%s'",
+                    trv_id,
+                    self._room_name,
+                )
+
+        # Step 2: Apply midnight crossing logic
+        processed = apply_midnight_crossing(schedule)
+
+        # Step 3: Build ZCL payloads
+        payloads = build_zcl_set_weekly_payloads(processed)
+
+        if not payloads:
+            _LOGGER.info("No schedule events to program for room '%s'", self._room_name)
+            self._current_schedule = schedule
+            return
+
+        # Step 4: Send to each TRV
+        for trv_id in self._trv_ids:
+            for payload in payloads:
+                try:
+                    await self._backend.async_set_weekly_schedule(
+                        trv_id,
+                        day_of_week=payload["day_of_week"],
+                        num_transitions=payload["num_transitions"],
+                        mode=payload["mode"],
+                        transitions=payload["transitions"],
+                    )
+                except Exception:  # noqa: BLE001
+                    _LOGGER.exception(
+                        "Failed to program schedule day 0x%02X on TRV %s",
+                        payload["day_of_week"],
+                        trv_id,
+                    )
+
+        # Step 5: Read-back verification from first TRV
+        await self._async_verify_schedule(self._trv_ids[0], processed)
+
+        # Store the original (pre-midnight-crossing) schedule
+        self._current_schedule = schedule
+
+        _LOGGER.info("Schedule programming complete for room '%s'", self._room_name)
+
+    async def _async_verify_schedule(
+        self, trv_id: str, expected: WeeklySchedule
+    ) -> bool:
+        """Read back schedule from a TRV and compare to expected.
+
+        Returns True if schedules match, False otherwise.
+        Logs warnings on mismatch but does not retry.
+        """
+        _LOGGER.debug(
+            "Verifying schedule on TRV %s in room '%s'", trv_id, self._room_name
+        )
+
+        actual = WeeklySchedule()
+
+        for day_idx in range(7):
+            if expected.days[day_idx].is_empty:
+                continue
+
+            try:
+                transitions = await self._backend.async_get_weekly_schedule(
+                    trv_id, SCHEDULE_DOW_ALL[day_idx]
+                )
+            except Exception:  # noqa: BLE001
+                _LOGGER.debug(
+                    "Failed to read back schedule for day %d from TRV %s",
+                    day_idx,
+                    trv_id,
+                )
+                return False
+
+            if transitions is None:
+                _LOGGER.debug(
+                    "No schedule data returned for day %d from TRV %s",
+                    day_idx,
+                    trv_id,
+                )
+                return False
+
+            parsed = parse_zcl_get_weekly_response(
+                SCHEDULE_DOW_ALL[day_idx], 0x01, transitions
+            )
+            if day_idx in parsed:
+                actual.days[day_idx] = parsed[day_idx]
+
+        if schedules_match(expected, actual):
+            _LOGGER.debug(
+                "Schedule verification passed for TRV %s in room '%s'",
+                trv_id,
+                self._room_name,
+            )
+            return True
+
+        _LOGGER.warning(
+            "Schedule verification FAILED for TRV %s in room '%s'. "
+            "The TRV may not have saved the schedule correctly.",
+            trv_id,
+            self._room_name,
+        )
+        return False
+
+    async def async_set_schedule_mode(
+        self, enabled: bool, preheat: bool = False, eco: bool = False
+    ) -> None:
+        """Set the thermostat programming operation mode on all TRVs.
+
+        Args:
+            enabled: True to enable schedule mode, False for manual.
+            preheat: True to enable preheat (only used when enabled=True).
+            eco: True to enable eco/pause mode (overrides enabled/preheat).
+        """
+        if eco:
+            mode = SCHEDULE_MODE_ECO
+        elif enabled:
+            mode = SCHEDULE_MODE_SCHEDULE_PREHEAT if preheat else SCHEDULE_MODE_SCHEDULE
+        else:
+            mode = SCHEDULE_MODE_MANUAL
+
+        await self.async_set_programming_mode_value(mode)
+
+    async def async_clear_schedule(self) -> None:
+        """Clear schedule on all TRVs and set manual mode."""
+        _LOGGER.info("Clearing schedule for room '%s'", self._room_name)
+
+        for trv_id in self._trv_ids:
+            try:
+                await self._backend.async_clear_weekly_schedule(trv_id)
+            except Exception:  # noqa: BLE001
+                _LOGGER.exception(
+                    "Failed to clear schedule on TRV %s in room '%s'",
+                    trv_id,
+                    self._room_name,
+                )
+
+        # Set manual mode
+        await self.async_set_schedule_mode(enabled=False)
+        self._current_schedule = None

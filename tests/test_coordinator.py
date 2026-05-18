@@ -15,6 +15,10 @@ from homeassistant.helpers import device_registry as dr
 from custom_components.danfoss_ally_gateway.backend.z2m import Z2MBackend
 from custom_components.danfoss_ally_gateway.const import (
     LOAD_BALANCE_DISABLED_VALUE,
+    SCHEDULE_MODE_ECO,
+    SCHEDULE_MODE_MANUAL,
+    SCHEDULE_MODE_SCHEDULE,
+    SCHEDULE_MODE_SCHEDULE_PREHEAT,
     SETPOINT_SOURCE_MANUAL,
     SETPOINT_TYPE_USER,
     WINDOW_OPEN_DETECTED,
@@ -23,6 +27,11 @@ from custom_components.danfoss_ally_gateway.const import (
 from custom_components.danfoss_ally_gateway.coordinator import (
     RoomCoordinator,
     RoomState,
+)
+from custom_components.danfoss_ally_gateway.schedule import (
+    DaySchedule,
+    ScheduleEvent,
+    WeeklySchedule,
 )
 
 # ── Setup / Teardown ──────────────────────────────────────────────────
@@ -1206,3 +1215,146 @@ class TestTimeSync:
 
         assert mock_backend.async_sync_time.call_count == 2
         await coord.async_teardown()
+
+
+# ── Schedule Programming ──────────────────────────────────────────────
+
+
+class TestScheduleProgramming:
+    """Tests for schedule programming and mode control."""
+
+    async def test_program_schedule(self, hass, mock_backend, subentry_data):
+        """Programming a schedule should clear, send, and store."""
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        await coord.async_setup()
+
+        ws = WeeklySchedule()
+        ws.days[1] = DaySchedule(
+            events=[
+                ScheduleEvent(360, 21.0),
+                ScheduleEvent(1320, 18.0),
+            ]
+        )
+
+        await coord.async_program_schedule(ws)
+
+        # Should have cleared schedule on both TRVs
+        assert mock_backend.async_clear_weekly_schedule.call_count == 2
+
+        # Should have sent schedule to both TRVs
+        assert mock_backend.async_set_weekly_schedule.call_count >= 2
+
+        # Should have stored the schedule
+        assert coord._current_schedule is not None
+        assert coord._current_schedule.total_events == 2
+
+        await coord.async_teardown()
+
+    async def test_program_invalid_schedule_raises(
+        self, hass, mock_backend, subentry_data
+    ):
+        """Invalid schedule should raise ValueError."""
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        await coord.async_setup()
+
+        ws = WeeklySchedule()
+        # Add too many events to one day
+        ws.days[0] = DaySchedule(
+            events=[ScheduleEvent(i * 100, 20.0) for i in range(7)]
+        )
+
+        with pytest.raises(ValueError, match="Invalid schedule"):
+            await coord.async_program_schedule(ws)
+
+        await coord.async_teardown()
+
+    async def test_clear_schedule(self, hass, mock_backend, subentry_data):
+        """Clearing schedule should clear TRVs and set manual mode."""
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        await coord.async_setup()
+
+        # First program a schedule
+        ws = WeeklySchedule()
+        ws.days[1] = DaySchedule(events=[ScheduleEvent(360, 21.0)])
+        await coord.async_program_schedule(ws)
+        assert coord._current_schedule is not None
+
+        # Clear it
+        mock_backend.async_clear_weekly_schedule.reset_mock()
+        await coord.async_clear_schedule()
+
+        assert mock_backend.async_clear_weekly_schedule.call_count == 2
+        assert coord._current_schedule is None
+        assert coord.schedule_mode == SCHEDULE_MODE_MANUAL
+
+        await coord.async_teardown()
+
+    async def test_set_programming_mode_schedule(
+        self, hass, mock_backend, subentry_data
+    ):
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        await coord.async_setup()
+
+        await coord.async_set_programming_mode_option("schedule")
+        assert coord.schedule_mode == SCHEDULE_MODE_SCHEDULE
+        assert coord.schedule_mode_option == "schedule"
+        assert mock_backend.async_set_programming_mode.call_count == 2
+
+        await coord.async_teardown()
+
+    async def test_set_programming_mode_preheat(
+        self, hass, mock_backend, subentry_data
+    ):
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        await coord.async_setup()
+
+        await coord.async_set_programming_mode_option("schedule_with_preheat")
+        assert coord.schedule_mode == SCHEDULE_MODE_SCHEDULE_PREHEAT
+
+        await coord.async_teardown()
+
+    async def test_set_programming_mode_pause(self, hass, mock_backend, subentry_data):
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        await coord.async_setup()
+
+        await coord.async_set_programming_mode_option("pause")
+        assert coord.schedule_mode == SCHEDULE_MODE_ECO
+
+        await coord.async_teardown()
+
+    async def test_set_programming_mode_invalid(
+        self, hass, mock_backend, subentry_data
+    ):
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        await coord.async_setup()
+
+        with pytest.raises(ValueError, match="Invalid"):
+            await coord.async_set_programming_mode_option("invalid_mode")
+
+        await coord.async_teardown()
+
+    async def test_set_schedule_mode_helper(self, hass, mock_backend, subentry_data):
+        """async_set_schedule_mode should map enabled/preheat/eco to mode values."""
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        await coord.async_setup()
+
+        await coord.async_set_schedule_mode(enabled=True)
+        assert coord.schedule_mode == SCHEDULE_MODE_SCHEDULE
+
+        await coord.async_set_schedule_mode(enabled=True, preheat=True)
+        assert coord.schedule_mode == SCHEDULE_MODE_SCHEDULE_PREHEAT
+
+        await coord.async_set_schedule_mode(enabled=False)
+        assert coord.schedule_mode == SCHEDULE_MODE_MANUAL
+
+        await coord.async_set_schedule_mode(enabled=True, eco=True)
+        assert coord.schedule_mode == SCHEDULE_MODE_ECO
+
+        await coord.async_teardown()
+
+    async def test_initial_schedule_mode(self, hass, mock_backend, subentry_data):
+        """Schedule mode should start as manual."""
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        assert coord.schedule_mode == SCHEDULE_MODE_MANUAL
+        assert coord.schedule_mode_option == "manual"
+        assert coord._current_schedule is None
