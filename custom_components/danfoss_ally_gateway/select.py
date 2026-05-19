@@ -88,6 +88,7 @@ class DanfossAllyProgrammingModeSelect(SelectEntity):
 
         # Initial state
         self._attr_current_option = coordinator.schedule_mode_option
+        self._attr_translation_placeholders = {"room_name": coordinator.room_name}
 
     async def async_added_to_hass(self) -> None:
         """Register for coordinator updates when added to HA."""
