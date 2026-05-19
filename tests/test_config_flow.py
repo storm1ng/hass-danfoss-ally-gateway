@@ -2,18 +2,25 @@
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
 from homeassistant import config_entries
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import selector
 
-from custom_components.danfoss_ally_gateway.config_flow import _build_trv_selector
+from custom_components.danfoss_ally_gateway.config_flow import (
+    _build_trv_selector,
+    _get_assigned_trv_ids,
+)
 from custom_components.danfoss_ally_gateway.const import (
     BACKEND_Z2M,
     BACKEND_ZHA,
     CONF_BACKEND,
     CONF_MQTT_BASE_TOPIC,
+    CONF_TRV_ENTITIES,
     DOMAIN,
+    SUBENTRY_ROOM,
     SUPPORTED_TRV_DEVICES_Z2M,
     SUPPORTED_TRV_DEVICES_ZHA,
 )
@@ -215,3 +222,54 @@ class TestBuildTrvSelector:
         sel = _build_trv_selector(BACKEND_ZHA)
         manufacturers = [f["manufacturer"] for f in sel.config["filter"]]
         assert "D5X84YU" in manufacturers
+
+
+# ── _get_assigned_trv_ids Tests ───────────────────────────────────────
+
+
+class TestGetAssignedTrvIds:
+    """Tests for the _get_assigned_trv_ids helper."""
+
+    def _make_entry(self, subentries: dict) -> MagicMock:
+        entry = MagicMock()
+        entry.subentries = subentries
+        return entry
+
+    def _make_subentry(
+        self, trv_ids: list[str], subentry_type: str = SUBENTRY_ROOM
+    ) -> MagicMock:
+        sub = MagicMock()
+        sub.subentry_type = subentry_type
+        sub.data = {CONF_TRV_ENTITIES: trv_ids}
+        return sub
+
+    def test_empty_subentries(self):
+        entry = self._make_entry({})
+        assert _get_assigned_trv_ids(entry) == set()
+
+    def test_collects_all_trv_ids(self):
+        entry = self._make_entry(
+            {
+                "sub1": self._make_subentry(["trv_a", "trv_b"]),
+                "sub2": self._make_subentry(["trv_c"]),
+            }
+        )
+        assert _get_assigned_trv_ids(entry) == {"trv_a", "trv_b", "trv_c"}
+
+    def test_excludes_subentry(self):
+        entry = self._make_entry(
+            {
+                "sub1": self._make_subentry(["trv_a", "trv_b"]),
+                "sub2": self._make_subentry(["trv_c"]),
+            }
+        )
+        assert _get_assigned_trv_ids(entry, exclude_subentry_id="sub1") == {"trv_c"}
+
+    def test_ignores_non_room_subentries(self):
+        entry = self._make_entry(
+            {
+                "sub1": self._make_subentry(["trv_a"], subentry_type="other"),
+                "sub2": self._make_subentry(["trv_b"]),
+            }
+        )
+        assert _get_assigned_trv_ids(entry) == {"trv_b"}

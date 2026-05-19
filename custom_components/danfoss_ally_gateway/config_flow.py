@@ -89,6 +89,25 @@ def _build_trv_selector(backend: str) -> selector.Selector:
     )
 
 
+def _get_assigned_trv_ids(
+    config_entry: ConfigEntry,
+    exclude_subentry_id: str | None = None,
+) -> set[str]:
+    """Return TRV device IDs already assigned to rooms.
+
+    If exclude_subentry_id is provided, TRVs from that subentry are excluded
+    (used during reconfigure so a room can keep its own TRVs).
+    """
+    assigned: set[str] = set()
+    for subentry_id, subentry in config_entry.subentries.items():
+        if subentry.subentry_type != SUBENTRY_ROOM:
+            continue
+        if subentry_id == exclude_subentry_id:
+            continue
+        assigned.update(subentry.data.get(CONF_TRV_ENTITIES, []))
+    return assigned
+
+
 class DanfossAllyGatewayConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Danfoss Ally Gateway."""
 
@@ -255,6 +274,8 @@ class RoomSubentryFlowHandler(ConfigSubentryFlow):
 
             if not trv_entities:
                 errors[CONF_TRV_ENTITIES] = "no_trvs_selected"
+            elif set(trv_entities) & _get_assigned_trv_ids(self._get_entry()):
+                errors[CONF_TRV_ENTITIES] = "trv_already_assigned"
             else:
                 return self.async_create_entry(
                     title=room_name,
@@ -367,6 +388,10 @@ class RoomSubentryFlowHandler(ConfigSubentryFlow):
 
             if not trv_entities:
                 errors[CONF_TRV_ENTITIES] = "no_trvs_selected"
+            elif set(trv_entities) & _get_assigned_trv_ids(
+                config_entry, subentry.subentry_id
+            ):
+                errors[CONF_TRV_ENTITIES] = "trv_already_assigned"
             else:
                 return self.async_update_and_abort(
                     config_entry,

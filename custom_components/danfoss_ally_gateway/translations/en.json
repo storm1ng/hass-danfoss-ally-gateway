@@ -100,7 +100,8 @@
                 }
             },
             "error": {
-                "no_trvs_selected": "At least one TRV must be selected."
+                "no_trvs_selected": "At least one TRV must be selected.",
+                "trv_already_assigned": "One or more selected TRVs are already assigned to another room."
             },
             "abort": {}
         }
