@@ -43,7 +43,7 @@ async def async_setup_entry(
         entities = list(
             create_room_entities(coordinator, config_entry.entry_id, subentry_id)
         )
-        async_add_entities(entities, False, config_subentry_id=subentry_id)
+        async_add_entities(entities, config_subentry_id=subentry_id)
 
 
 def create_room_entities(
