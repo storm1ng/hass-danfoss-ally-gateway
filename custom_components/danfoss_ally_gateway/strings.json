@@ -125,33 +125,33 @@
             "window_open": {
                 "name": "{room_name} Window Open"
             }
-        }
-    },
-    "sensor": {
-        "heating_demand": {
-            "name": "{trv_name} Heating Demand"
         },
-        "load_estimate": {
-            "name": "{trv_name} Load Estimate"
-        },
-        "load_room_mean": {
-            "name": "{room_name} Load Room Mean"
-        }
-    },
-    "select": {
-        "programming_mode": {
-            "name": "{room_name} Programming Mode",
-            "state": {
-                "manual": "Manual",
-                "schedule": "Schedule",
-                "schedule_with_preheat": "Schedule + Preheat",
-                "pause": "Pause"
+        "sensor": {
+            "heating_demand": {
+                "name": "{trv_name} Heating Demand"
+            },
+            "load_estimate": {
+                "name": "{trv_name} Load Estimate"
+            },
+            "load_room_mean": {
+                "name": "{room_name} Load Room Mean"
             }
-        }
-    },
-    "switch": {
-        "load_balancing": {
-            "name": "{room_name} Load Balancing"
+        },
+        "select": {
+            "programming_mode": {
+                "name": "{room_name} Programming Mode",
+                "state": {
+                    "manual": "Manual",
+                    "schedule": "Schedule",
+                    "schedule_with_preheat": "Schedule + Preheat",
+                    "pause": "Pause"
+                }
+            }
+        },
+        "switch": {
+            "load_balancing": {
+                "name": "{room_name} Load Balancing"
+            }
         }
     }
 }
