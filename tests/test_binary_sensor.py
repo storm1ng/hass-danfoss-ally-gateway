@@ -56,12 +56,19 @@ class TestBinarySensorCreation:
             assert f"{DOMAIN}_entry1_sub1_{suffix}" in uids
 
     def test_names(self, hass, mock_backend, subentry_data):
-        """Entity names include the room name."""
+        """Entity translation keys and placeholders are set correctly."""
         _, entities = _make_entities(hass, mock_backend, subentry_data)
-        names = {e.name for e in entities}
-        assert "Living Room Heat Required" in names
-        assert "Living Room Heat Available" in names
-        assert "Living Room Window Open" in names
+        for e in entities:
+            assert e.translation_key is not None
+            assert e._attr_translation_placeholders == {"room_name": "Living Room"}
+        heat_req = next(e for e in entities if isinstance(e, DanfossAllyHeatRequired))
+        assert heat_req.translation_key == "heat_required"
+        heat_avail = next(
+            e for e in entities if isinstance(e, DanfossAllyHeatAvailable)
+        )
+        assert heat_avail.translation_key == "heat_available"
+        win_open = next(e for e in entities if isinstance(e, DanfossAllyWindowOpen))
+        assert win_open.translation_key == "window_open"
 
 
 # ── Device Info ───────────────────────────────────────────────────────

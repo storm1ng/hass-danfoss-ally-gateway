@@ -119,21 +119,28 @@ class TestSensorNames:
         heating_demand = [
             e for e in entities if isinstance(e, DanfossAllyHeatingDemand)
         ]
-        names = {e.name for e in heating_demand}
-        assert "trv_1 Heating Demand" in names
-        assert "trv_2 Heating Demand" in names
+        for e in heating_demand:
+            assert e.translation_key == "heating_demand"
+        placeholders = {
+            e._attr_translation_placeholders["trv_name"] for e in heating_demand
+        }
+        assert "trv_1" in placeholders
+        assert "trv_2" in placeholders
 
     def test_load_estimate_name(self, hass, mock_backend, subentry_data):
         _, entities = _make_entities(hass, mock_backend, subentry_data)
         load_est = [e for e in entities if isinstance(e, DanfossAllyLoadEstimate)]
-        names = {e.name for e in load_est}
-        assert "trv_1 Load Estimate" in names
-        assert "trv_2 Load Estimate" in names
+        for e in load_est:
+            assert e.translation_key == "load_estimate"
+        placeholders = {e._attr_translation_placeholders["trv_name"] for e in load_est}
+        assert "trv_1" in placeholders
+        assert "trv_2" in placeholders
 
     def test_load_room_mean_name(self, hass, mock_backend, subentry_data):
         _, entities = _make_entities(hass, mock_backend, subentry_data)
         load_mean = next(e for e in entities if isinstance(e, DanfossAllyLoadRoomMean))
-        assert load_mean.name == "Living Room Load Room Mean"
+        assert load_mean.translation_key == "load_room_mean"
+        assert load_mean._attr_translation_placeholders == {"room_name": "Living Room"}
 
 
 # ── Device Info ───────────────────────────────────────────────────────

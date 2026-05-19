@@ -129,6 +129,7 @@ class DanfossAllyHeatingDemand(_DanfossAllySensorBase):
     _attr_native_unit_of_measurement = PERCENTAGE
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_icon = "mdi:radiator"
+    _attr_translation_key = "heating_demand"
 
     def __init__(
         self,
@@ -143,7 +144,7 @@ class DanfossAllyHeatingDemand(_DanfossAllySensorBase):
         self._attr_unique_id = (
             f"{DOMAIN}_{config_entry_id}_{subentry_id}_{trv_id}_heating_demand"
         )
-        self._attr_name = f"{trv_id} Heating Demand"
+        self._attr_translation_placeholders = {"trv_name": trv_id}
 
     @property
     def native_value(self) -> int | None:
@@ -159,6 +160,7 @@ class DanfossAllyLoadEstimate(_DanfossAllySensorBase):
 
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_icon = "mdi:scale-balance"
+    _attr_translation_key = "load_estimate"
 
     def __init__(
         self,
@@ -173,7 +175,7 @@ class DanfossAllyLoadEstimate(_DanfossAllySensorBase):
         self._attr_unique_id = (
             f"{DOMAIN}_{config_entry_id}_{subentry_id}_{trv_id}_load_estimate"
         )
-        self._attr_name = f"{trv_id} Load Estimate"
+        self._attr_translation_placeholders = {"trv_name": trv_id}
 
     @property
     def native_value(self) -> int | None:
@@ -189,6 +191,7 @@ class DanfossAllyLoadRoomMean(_DanfossAllySensorBase):
 
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_icon = "mdi:scale-balance"
+    _attr_translation_key = "load_room_mean"
 
     def __init__(
         self,
@@ -201,7 +204,7 @@ class DanfossAllyLoadRoomMean(_DanfossAllySensorBase):
         self._attr_unique_id = (
             f"{DOMAIN}_{config_entry_id}_{subentry_id}_load_room_mean"
         )
-        self._attr_name = f"{coordinator.room_name} Load Room Mean"
+        self._attr_translation_placeholders = {"room_name": coordinator.room_name}
 
     @property
     def native_value(self) -> int | None:

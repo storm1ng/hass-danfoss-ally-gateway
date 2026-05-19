@@ -35,7 +35,8 @@ class TestClimateEntityCreation:
 
         coord = RoomCoordinator(hass, mock_backend, subentry_data)
         entity = create_room_entities(coord, "entry1", "sub1")[0]
-        assert entity.name == "Living Room"
+        assert entity.translation_key == "room"
+        assert entity._attr_translation_placeholders == {"room_name": "Living Room"}
 
     def test_device_info(self, hass, mock_backend, subentry_data):
         from custom_components.danfoss_ally_gateway.coordinator import RoomCoordinator

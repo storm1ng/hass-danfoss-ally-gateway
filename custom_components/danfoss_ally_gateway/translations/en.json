@@ -127,6 +127,9 @@
         }
     },
     "sensor": {
+        "heating_demand": {
+            "name": "{trv_name} Heating Demand"
+        },
         "load_estimate": {
             "name": "{trv_name} Load Estimate"
         },

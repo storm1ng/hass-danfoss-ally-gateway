@@ -73,6 +73,7 @@ class DanfossAllyRoomClimate(ClimateEntity):
     """Virtual climate entity for a Danfoss Ally room."""
 
     _attr_has_entity_name = True
+    _attr_translation_key = "room"
     _attr_temperature_unit = UnitOfTemperature.CELSIUS
     _attr_hvac_modes = [HVACMode.HEAT]
     _attr_supported_features = ClimateEntityFeature.TARGET_TEMPERATURE
@@ -92,7 +93,7 @@ class DanfossAllyRoomClimate(ClimateEntity):
         self._subentry_id = subentry_id
         # Entity IDs
         self._attr_unique_id = f"{DOMAIN}_{config_entry_id}_{subentry_id}_climate"
-        self._attr_name = coordinator.room_name
+        self._attr_translation_placeholders = {"room_name": coordinator.room_name}
 
         # Device grouping: one virtual device per room
         self._attr_device_info = DeviceInfo(

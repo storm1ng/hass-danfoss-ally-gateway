@@ -68,6 +68,7 @@ class DanfossAllyLoadBalancingSwitch(SwitchEntity):
 
     _attr_has_entity_name = True
     _attr_icon = "mdi:scale-balance"
+    _attr_translation_key = "load_balancing"
 
     def __init__(
         self,
@@ -82,7 +83,7 @@ class DanfossAllyLoadBalancingSwitch(SwitchEntity):
         self._attr_unique_id = (
             f"{DOMAIN}_{config_entry_id}_{subentry_id}_load_balancing"
         )
-        self._attr_name = f"{coordinator.room_name} Load Balancing"
+        self._attr_translation_placeholders = {"room_name": coordinator.room_name}
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, f"{config_entry_id}_{subentry_id}")},
             name=f"Danfoss Ally {coordinator.room_name}",

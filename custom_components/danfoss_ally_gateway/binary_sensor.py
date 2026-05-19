@@ -3,6 +3,7 @@
 Provides per-room binary sensors:
 - Heat Required: any TRV has pi_heating_demand > 0
 - Heat Available: heat source is providing heat
+- Window Open: any TRV has window_open == 3
 """
 
 from __future__ import annotations
@@ -117,7 +118,7 @@ class DanfossAllyHeatRequired(_DanfossAllyBinarySensorBase):
     ) -> None:
         """Initialize heat required sensor."""
         super().__init__(coordinator, config_entry_id, subentry_id, "heat_required")
-        self._attr_name = f"{coordinator.room_name} Heat Required"
+        self._attr_translation_placeholders = {"room_name": coordinator.room_name}
 
     @property
     def is_on(self) -> bool:
@@ -138,7 +139,7 @@ class DanfossAllyHeatAvailable(_DanfossAllyBinarySensorBase):
     ) -> None:
         """Initialize heat available sensor."""
         super().__init__(coordinator, config_entry_id, subentry_id, "heat_available")
-        self._attr_name = f"{coordinator.room_name} Heat Available"
+        self._attr_translation_placeholders = {"room_name": coordinator.room_name}
 
     @property
     def is_on(self) -> bool | None:
@@ -150,6 +151,7 @@ class DanfossAllyWindowOpen(_DanfossAllyBinarySensorBase):
     """Binary sensor: window open detected in the room."""
 
     _attr_device_class = BinarySensorDeviceClass.WINDOW
+    _attr_translation_key = "window_open"
 
     def __init__(
         self,
@@ -159,7 +161,7 @@ class DanfossAllyWindowOpen(_DanfossAllyBinarySensorBase):
     ) -> None:
         """Initialize window open sensor."""
         super().__init__(coordinator, config_entry_id, subentry_id, "window_open")
-        self._attr_name = f"{coordinator.room_name} Window Open"
+        self._attr_translation_placeholders = {"room_name": coordinator.room_name}
 
     @property
     def is_on(self) -> bool:
