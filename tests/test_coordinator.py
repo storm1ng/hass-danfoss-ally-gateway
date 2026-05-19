@@ -202,7 +202,7 @@ class TestExternalTemperature:
         coord = RoomCoordinator(hass, mock_backend, data)
         await coord.async_setup()
 
-        assert mock_backend.async_set_external_temperature.call_count == 2
+        assert mock_backend.async_set_external_temperature.call_count == 2  # 2 TRVs
         call_args = mock_backend.async_set_external_temperature.call_args_list
         assert call_args[0][0] == ("trv_1", 21.5)
         assert call_args[1][0] == ("trv_2", 21.5)
@@ -233,6 +233,7 @@ class TestExternalTemperature:
 
         await coord.async_teardown()
 
+        # Should send -80.0 (disabled) to each TRV
         assert mock_backend.async_set_external_temperature.call_count == 2
         for call in mock_backend.async_set_external_temperature.call_args_list:
             assert call[0][1] == -80.0  # EXTERNAL_TEMP_DISABLED / 100
@@ -244,14 +245,16 @@ class TestExternalTemperature:
         coord = RoomCoordinator(hass, mock_backend, data)
         await coord.async_setup()
 
+        # Initially all TRVs default to covered=False
         assert coord._ext_temp_trv["trv_1"].covered is False
         assert coord._ext_temp_trv["trv_2"].covered is False
 
+        # Simulate TRV reporting radiator_covered=True
         mock_backend.fire_state_update(
             "trv_1", make_trv_state("trv_1", radiator_covered=True)
         )
         assert coord._ext_temp_trv["trv_1"].covered is True
-        assert coord._ext_temp_trv["trv_2"].covered is False
+        assert coord._ext_temp_trv["trv_2"].covered is False  # unchanged
 
         await coord.async_teardown()
 
@@ -262,6 +265,7 @@ class TestExternalTemperature:
         coord = RoomCoordinator(hass, mock_backend, data)
         await coord.async_setup()
 
+        # Mark trv_1 as covered, trv_2 stays exposed
         mock_backend.fire_state_update(
             "trv_1", make_trv_state("trv_1", radiator_covered=True)
         )
@@ -269,8 +273,11 @@ class TestExternalTemperature:
             "trv_2", make_trv_state("trv_2", radiator_covered=False)
         )
 
+        # Both TRVs should have received the initial temp
         assert coord._ext_temp_trv["trv_1"].last_temp_sent == 21.5
         assert coord._ext_temp_trv["trv_2"].last_temp_sent == 21.5
+
+        # Verify covered flags are independent
         assert coord._ext_temp_trv["trv_1"].covered is True
         assert coord._ext_temp_trv["trv_2"].covered is False
 
@@ -289,6 +296,7 @@ class TestExternalTemperature:
             ext_state = coord._ext_temp_trv[trv_id]
             assert ext_state.last_temp_sent == 20.0
             assert ext_state.last_send_time > 0.0
+            # Max interval timer should be scheduled
             assert ext_state.timer is not None
 
         await coord.async_teardown()
@@ -302,11 +310,13 @@ class TestExternalTemperature:
         coord = RoomCoordinator(hass, mock_backend, data)
         await coord.async_setup()
 
+        # Verify timers exist
         for ext_state in coord._ext_temp_trv.values():
             assert ext_state.timer is not None
 
         await coord.async_teardown()
 
+        # After teardown, all timers should be cancelled
         for ext_state in coord._ext_temp_trv.values():
             assert ext_state.timer is None
 
@@ -317,13 +327,16 @@ class TestExternalTemperature:
         coord = RoomCoordinator(hass, mock_backend, data)
         await coord.async_setup()
 
+        # Initially exposed
         assert coord._ext_temp_trv["trv_1"].covered is False
 
+        # TRV reports covered=True
         mock_backend.fire_state_update(
             "trv_1", make_trv_state("trv_1", radiator_covered=True)
         )
         assert coord._ext_temp_trv["trv_1"].covered is True
 
+        # TRV reports covered=False again
         mock_backend.fire_state_update(
             "trv_1", make_trv_state("trv_1", radiator_covered=False)
         )

@@ -16,6 +16,7 @@ Implements per-room coordination logic:
 """
 
 import asyncio
+import contextlib
 import logging
 import time
 from collections.abc import Callable
@@ -436,16 +437,27 @@ class RoomCoordinator:
         if not states:
             return  # No TRV states yet
 
-        # Current temperature: average of TRV local temperatures
-        temps = [
-            s.local_temperature
-            for s in states.values()
-            if s.local_temperature is not None
-        ]
-        if temps:
-            self.state.current_temperature = sum(temps) / len(temps)
+        # Current temperature: prefer external sensor
+        if self._temp_sensor_id:
+            sensor_state = self.hass.states.get(self._temp_sensor_id)
+            if sensor_state and sensor_state.state not in (
+                STATE_UNAVAILABLE,
+                STATE_UNKNOWN,
+            ):
+                with contextlib.suppress(ValueError, TypeError):
+                    self.state.current_temperature = float(sensor_state.state)
+        else:
+            # Average of TRV local temperatures
+            temps = [
+                s.local_temperature
+                for s in states.values()
+                if s.local_temperature is not None
+            ]
+            if temps:
+                self.state.current_temperature = sum(temps) / len(temps)
 
         # Target temperature: use the first TRV's setpoint (in configured order)
+        # They should all be in sync; using deterministic order avoids fragility.
         for trv_id in self._trv_ids:
             trv = states.get(trv_id)
             if trv is not None and trv.occupied_heating_setpoint is not None:
