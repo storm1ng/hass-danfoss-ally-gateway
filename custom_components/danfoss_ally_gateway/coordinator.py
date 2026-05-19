@@ -1606,10 +1606,11 @@ class RoomCoordinator:
             self._room_name,
         )
 
-        # Delay 5s to let upstream danfossTimeSyncOnAnnounce complete time sync
-        async def _rejoin_cb(_now: Any) -> None:
-            await self._async_handle_device_rejoin(trv_id)
+        @callback
+        def _rejoin_cb(_now: Any) -> None:
+            self.hass.async_create_task(self._async_handle_device_rejoin(trv_id))
 
+        # Delay 5s to let upstream danfossTimeSyncOnAnnounce complete time sync
         async_call_later(self.hass, 5, _rejoin_cb)
 
     async def _async_handle_device_rejoin(self, trv_id: str) -> None:
