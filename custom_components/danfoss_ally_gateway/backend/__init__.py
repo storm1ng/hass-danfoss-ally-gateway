@@ -1,5 +1,7 @@
 """Backend abstraction for Danfoss Ally TRV communication."""
 
+from __future__ import annotations
+
 import abc
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -10,9 +12,9 @@ from homeassistant.core import HomeAssistant
 
 @dataclass
 class TRVState:
-    """Snapshot of a single TRV's current state"""
+    """Snapshot of a single TRV's current state."""
 
-    entity_id: str
+    entity_id: str  # Z2M: friendly_name / Z2M device id; ZHA: entity_id
     local_temperature: float | None = None
     occupied_heating_setpoint: float | None = None
     pi_heating_demand: int | None = None
