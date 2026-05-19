@@ -140,7 +140,13 @@ class RoomCoordinator:
 
     One instance is created per room subentry. It manages:
     - Subscribing to TRV state changes via the backend
-    - Aggregating TRV state into a room-level view
+    - External temperature forwarding with Danfoss timing specs
+    - Heat availability signaling
+    - Load balancing (15-minute cycle)
+    - Setpoint coordination (manual dial → other TRVs)
+    - Window open coordination
+    - Preheat coordination
+    - Time synchronization
     """
 
     def __init__(
@@ -160,6 +166,8 @@ class RoomCoordinator:
         self._heat_source_id: str = subentry_data.get(CONF_HEAT_SOURCE, "")
         self._heat_source_type: str = subentry_data.get(CONF_HEAT_SOURCE_TYPE, "")
         self._remote_climate_id: str = subentry_data.get(CONF_REMOTE_CLIMATE, "")
+
+        # Schedule configuration
         self._schedule_entity_id: str = subentry_data.get(CONF_SCHEDULE_ENTITY, "")
         self._at_home_temp: float = subentry_data.get(
             CONF_AT_HOME_TEMP, DEFAULT_AT_HOME_TEMP
@@ -176,34 +184,39 @@ class RoomCoordinator:
         # Cleanup callbacks
         self._unsub_callbacks: list[CALLBACK_TYPE] = []
 
-        # TRV availability tracking: last update time per TRV
-        self._last_trv_update_time: dict[str, float] = {}
-
         # Per-TRV external temperature tracking
         self._ext_temp_trv: dict[str, ExtTempTRVState] = {
             trv_id: ExtTempTRVState() for trv_id in self._trv_ids
         }
 
         # Load balancing tracking
-        self._load_estimates: dict[str, LoadEstimateEntry] = {}
+        self._load_estimates: dict[str, LoadEstimateEntry] = {}  # trv_id → entry
         self._load_balance_timer: CALLBACK_TYPE | None = None
-        self._load_balancing_enabled: bool = len(self._trv_ids) > 1
+        self._load_balancing_enabled: bool = (
+            len(self._trv_ids) > 1
+        )  # default ON for multi-TRV
+
+        # TRV availability tracking: last update time per TRV
+        self._last_trv_update_time: dict[str, float] = {}  # trv_id → monotonic time
 
         # Setpoint coordination
-        self._setpoint_lock = asyncio.Lock()
-        self._programmatic_setpoint: bool = False
-
-        # Window coordination
-        self._forced_window_open_trvs: set[str] = set()  # TRVs we forced open
-
-        # Preheat coordination
-        self._last_forwarded_preheat: dict[str, int] = {}  # trv_id → preheat_time
+        self._last_known_setpoints: dict[str, float] = {}  # trv_id → setpoint
+        self._setpoint_lock = asyncio.Lock()  # Guards programmatic setpoint writes
+        self._programmatic_setpoint: bool = False  # True when we're writing setpoints
 
         # Remote climate anti-echo
         self._remote_setpoint_suppress_until: float = 0.0  # monotonic timestamp
 
+        # Window open coordination
+        self._forced_window_open_trvs: set[str] = set()  # TRVs we forced open
+
+        # Preheat coordination deduplication
+        self._last_forwarded_preheat: dict[str, int] = {}  # trv_id → preheat_time
+
+        # Time sync
         self._time_sync_timer: CALLBACK_TYPE | None = None
 
+        # Schedule management
         self._current_schedule: WeeklySchedule | None = None  # Last programmed schedule
         self._schedule_mode: int = SCHEDULE_MODE_MANUAL  # Current programming mode
         self._power_cycle_timer: CALLBACK_TYPE | None = None
@@ -384,7 +397,7 @@ class RoomCoordinator:
                     await self._backend.async_set_external_temperature(
                         trv_id, EXTERNAL_TEMP_DISABLED / 100
                     )
-                except Exception:
+                except Exception:  # noqa: BLE001
                     _LOGGER.debug(
                         "Failed to disable ext temp on %s during teardown", trv_id
                     )
@@ -538,7 +551,11 @@ class RoomCoordinator:
 
     @callback
     def _handle_temp_sensor_change(self, event: Event[EventStateChangedData]) -> None:
-        """Handle external temperature sensor state change."""
+        """Handle external temperature sensor state change.
+
+        Evaluates each TRV independently against its own timing mode
+        (covered vs exposed) and threshold.
+        """
         new_state = event.data["new_state"]
         if new_state is None or new_state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
             return
@@ -551,11 +568,13 @@ class RoomCoordinator:
         now = time.monotonic()
 
         for trv_id, ext_state in self._ext_temp_trv.items():
+            # Check if change exceeds threshold for this TRV
             if ext_state.last_temp_sent is not None:
                 delta = abs(new_temp - ext_state.last_temp_sent)
                 if delta < EXT_TEMP_CHANGE_THRESHOLD:
-                    continue
+                    continue  # Change too small for this TRV, skip
 
+            # Check minimum interval for this TRV
             min_interval = (
                 EXT_TEMP_COVERED_MIN_INTERVAL
                 if ext_state.covered
@@ -564,6 +583,7 @@ class RoomCoordinator:
             elapsed = now - ext_state.last_send_time
 
             if elapsed < min_interval:
+                # Schedule deferred send for this TRV if not already scheduled
                 if ext_state.timer is None:
                     delay = min_interval - elapsed
                     self._schedule_deferred_ext_temp_send(trv_id, new_temp, delay)
@@ -601,7 +621,7 @@ class RoomCoordinator:
 
         try:
             await self._backend.async_set_external_temperature(trv_id, temperature)
-        except Exception:
+        except Exception:  # noqa: BLE001
             _LOGGER.exception(
                 "Failed to send ext temp to TRV %s in room '%s'",
                 trv_id,
@@ -613,6 +633,7 @@ class RoomCoordinator:
         ext_state.last_temp_sent = temperature
         ext_state.last_send_time = time.monotonic()
 
+        # Schedule max interval resend for this TRV
         self._schedule_ext_temp_max_interval(trv_id, temperature)
 
     async def _async_send_ext_temp_all(self, temperature: float) -> None:
@@ -629,6 +650,7 @@ class RoomCoordinator:
         """Schedule a resend at the max interval to prevent TRV timeout."""
         ext_state = self._ext_temp_trv[trv_id]
 
+        # Cancel any existing timer for this TRV
         if ext_state.timer is not None:
             ext_state.timer()
             ext_state.timer = None
@@ -642,6 +664,7 @@ class RoomCoordinator:
         @callback
         def _resend(_now: Any) -> None:
             ext_state.timer = None
+            # Re-read current sensor value
             if self._temp_sensor_id:
                 sensor_state = self.hass.states.get(self._temp_sensor_id)
                 if sensor_state and sensor_state.state not in (
@@ -684,17 +707,21 @@ class RoomCoordinator:
         heat_available: bool
 
         if self._heat_source_type == HEAT_SOURCE_CLIMATE:
+            # For climate entities: heat is available when hvac_action is "heating"
             hvac_action = entity_state.attributes.get("hvac_action", "")
             heat_available = hvac_action == "heating"
         elif self._heat_source_type == HEAT_SOURCE_BINARY_SENSOR:
+            # For binary sensors: ON = heat available
             heat_available = entity_state.state == STATE_ON
         else:
+            # Default: try to infer
             if entity_state.domain == "climate":
                 hvac_action = entity_state.attributes.get("hvac_action", "")
                 heat_available = hvac_action == "heating"
             else:
                 heat_available = entity_state.state == STATE_ON
 
+        # Only update if changed
         if self.state.heat_available == heat_available:
             return
 
@@ -706,7 +733,7 @@ class RoomCoordinator:
         for trv_id in self._trv_ids:
             try:
                 await self._backend.async_set_heat_available(trv_id, heat_available)
-            except Exception:
+            except Exception:  # noqa: BLE001
                 _LOGGER.exception(
                     "Failed to set heat_available on TRV %s in room '%s'",
                     trv_id,
@@ -714,91 +741,6 @@ class RoomCoordinator:
                 )
 
         self._notify_state_update()
-
-    # ── Setpoint Coordination ──────────────────────────────────────────
-
-    async def _async_check_setpoint_coordination(
-        self, trv_id: str, old_state: TRVState, new_state: TRVState
-    ) -> None:
-        """Check if a TRV's setpoint changed due to manual dial turn.
-
-        Per Danfoss spec: When setpoint_change_source == 0x00 (manual),
-        forward the new setpoint to other room TRVs as Type 1 (aggressive).
-        """
-        if self._programmatic_setpoint:
-            return  # We're the ones writing, ignore echo
-
-        new_setpoint = new_state.occupied_heating_setpoint
-        old_setpoint = old_state.occupied_heating_setpoint
-
-        if new_setpoint is None or new_setpoint == old_setpoint:
-            return  # No change
-
-        # Check if the change was manual
-        if new_state.setpoint_change_source != SETPOINT_SOURCE_MANUAL:
-            return
-
-        _LOGGER.info(
-            "Manual setpoint change on %s in room '%s': %.1f → %.1f°C",
-            trv_id,
-            self._room_name,
-            old_setpoint or 0,
-            new_setpoint,
-        )
-
-        # Forward to other TRVs as Type 1 (user interaction / aggressive)
-        if len(self._trv_ids) > 1:
-            async with self._setpoint_lock:
-                self._programmatic_setpoint = True
-                try:
-                    for other_trv in self._trv_ids:
-                        if other_trv == trv_id:
-                            continue
-                        try:
-                            await self._backend.async_send_setpoint_command(
-                                other_trv, new_setpoint, SETPOINT_TYPE_USER
-                            )
-                        except Exception:
-                            _LOGGER.exception(
-                                "Failed to forward setpoint to TRV %s", other_trv
-                            )
-                finally:
-                    self._programmatic_setpoint = False
-
-        # Update room state
-        self.state.target_temperature = new_setpoint
-        self._notify_state_update()
-
-        # Sync to remote climate if configured
-        await self._async_sync_remote_climate(new_setpoint)
-
-    async def async_set_room_temperature(self, temperature: float) -> None:
-        """Set target temperature for the entire room (from climate entity).
-
-        Uses OccupiedHeatingSetpoint write (Type 0 / gentle motor).
-        """
-        _LOGGER.debug(
-            "Setting room '%s' temperature to %.1f°C", self._room_name, temperature
-        )
-
-        async with self._setpoint_lock:
-            self._programmatic_setpoint = True
-            try:
-                for trv_id in self._trv_ids:
-                    try:
-                        await self._backend.async_set_occupied_heating_setpoint(
-                            trv_id, temperature
-                        )
-                    except Exception:
-                        _LOGGER.exception("Failed to set setpoint on TRV %s", trv_id)
-            finally:
-                self._programmatic_setpoint = False
-
-        self.state.target_temperature = temperature
-        self._notify_state_update()
-
-        # Sync to remote climate if configured
-        await self._async_sync_remote_climate(temperature)
 
     # ── Remote Climate Sync ────────────────────────────────────────────
 
@@ -915,198 +857,12 @@ class RoomCoordinator:
             await self.hass.services.async_call(
                 "climate", "set_temperature", service_data
             )
-        except Exception:
+        except Exception:  # noqa: BLE001
             _LOGGER.exception(
                 "Failed to sync setpoint to remote climate %s in room '%s'",
                 self._remote_climate_id,
                 self._room_name,
             )
-
-    # ── Window Open Coordination ───────────────────────────────────────
-
-    async def _async_check_window_coordination(
-        self, trv_id: str, trv_state: TRVState
-    ) -> None:
-        """Check and coordinate window open events across room TRVs.
-
-        Per Danfoss spec:
-        - When a TRV detects window open (state >= 3), force
-          external_window_open=true on other room TRVs.
-        - Deactivate (set false) when all forced TRVs report state 4.
-        """
-        if len(self._trv_ids) <= 1:
-            return
-
-        window_state = trv_state.window_open_detection
-        if window_state is None:
-            return
-
-        if window_state == WINDOW_OPEN_DETECTED:
-            # This TRV locally detected window open (state 3) - force other TRVs
-            # If this TRV was already forced by the coordinator, its local
-            # detection is redundant - dont' cascade back or we deadlock
-            # (all TRVs end up in _forced and nobody can trigger deactivation).
-            if trv_id in self._forced_window_open_trvs:
-                _LOGGER.debug(
-                    "TRV %s is room '%s' reported state 3 but is already forced, "
-                    "skipping cascade",
-                    trv_id,
-                    self._room_name,
-                )
-                return
-            other_trvs = [t for t in self._trv_ids if t != trv_id]
-            newly_forced = [
-                t for t in other_trvs if t not in self._forced_window_open_trvs
-            ]
-
-            if newly_forced:
-                _LOGGER.info(
-                    "Window open detected on %s in room '%s', forcing %d other TRVs",
-                    trv_id,
-                    self._room_name,
-                    len(newly_forced),
-                )
-                for other_trv in newly_forced:
-                    try:
-                        await self._backend.async_set_external_window_open(
-                            other_trv, True
-                        )
-                        self._forced_window_open_trvs.add(other_trv)
-                    except Exception:
-                        _LOGGER.exception(
-                            "Failed to set external_window_open on %s", other_trv
-                        )
-        elif window_state == WINDOW_OPEN_EXTERNAL_OPEN:
-            # State 4: this TRV was forced open by the gateway.
-            # If it's not tracked in _forced_window_open_trvs (e.g. after HA
-            # restart), it's an orphan — clear it so the TRV can resume
-            # normal operation and re-detect if the window is still open.
-            if trv_id not in self._forced_window_open_trvs:
-                _LOGGER.info(
-                    "Clearing orphaned window_open_external on %s in room '%s' "
-                    "(not tracked after restart)",
-                    trv_id,
-                    self._room_name,
-                )
-                try:
-                    await self._backend.async_set_external_window_open(trv_id, False)
-                except Exception:
-                    _LOGGER.exception(
-                        "Failed to clear orphaned external_window_open on %s",
-                        trv_id,
-                    )
-        else:
-            # Check if all forced TRVs have reached state 4 (open confirmed)
-            # and we can deactivate. Only check TRVs that have reported state;
-            # skip forced TRVs not yet in trv_states to avoid creating
-            # phantom entries with None fields.
-            if self._forced_window_open_trvs:
-                forced_with_state = [
-                    t
-                    for t in self._forced_window_open_trvs
-                    if t in self.state.trv_states
-                ]
-                # Only proceed if we have state for at least one forced TRV
-                all_confirmed = len(forced_with_state) > 0 and all(
-                    self.state.trv_states[t].window_open_detection
-                    == WINDOW_OPEN_EXTERNAL_OPEN
-                    for t in forced_with_state
-                )
-                if all_confirmed:
-                    # Check if the detecting TRV(s) have closed
-                    any_still_open = any(
-                        (s.window_open_detection or 0) == WINDOW_OPEN_DETECTED
-                        for tid, s in self.state.trv_states.items()
-                        if tid not in self._forced_window_open_trvs
-                    )
-                    if not any_still_open:
-                        _LOGGER.info(
-                            "Window closed in room '%s', deactivating forced open",
-                            self._room_name,
-                        )
-                        for forced_trv in list(self._forced_window_open_trvs):
-                            try:
-                                await self._backend.async_set_external_window_open(
-                                    forced_trv, False
-                                )
-                            except Exception:  # noqa: BLE001
-                                _LOGGER.exception(
-                                    "Failed to clear external_window_open on %s",
-                                    forced_trv,
-                                )
-                        self._forced_window_open_trvs.clear()
-
-    # ── Preheat Coordination ──────────────────────────────────────────
-
-    async def _async_check_preheat_coordination(
-        self, trv_id: str, trv_state: TRVState
-    ) -> None:
-        """Check and coordinate preheat events across room TRVs.
-
-        Per Danfoss spec: When a TRV reports preheat_status=true and a
-        preheat_time, forward the preheat_time to other room TRVs via
-        PreHeatCommand. Deduplicates by tracking the last forwarded value
-        per TRV.
-        """
-        if len(self._trv_ids) <= 1:
-            return
-
-        if not trv_state.preheat_status or trv_state.preheat_time is None:
-            return
-
-        # Deduplicate: skip if we already forwarded this exact preheat_time
-        # from this TRV
-        last_forwarded = self._last_forwarded_preheat.get(trv_id)
-        if last_forwarded == trv_state.preheat_time:
-            return
-
-        self._last_forwarded_preheat[trv_id] = trv_state.preheat_time
-
-        _LOGGER.debug(
-            "Preheat detected on %s in room '%s' (time=%d), forwarding to other TRVs",
-            trv_id,
-            self._room_name,
-            trv_state.preheat_time,
-        )
-
-        for other_trv in self._trv_ids:
-            if other_trv == trv_id:
-                continue
-            try:
-                await self._backend.async_send_preheat_command(
-                    other_trv, trv_state.preheat_time
-                )
-            except Exception:
-                _LOGGER.exception("Failed to forward preheat to TRV %s", other_trv)
-
-    # ── Time Synchronization ──────────────────────────────────────────
-
-    def _schedule_time_sync(self) -> None:
-        """Schedule weekly time sync."""
-
-        @callback
-        def _run_time_sync(_now: Any) -> None:
-            self._time_sync_timer = None
-            self.hass.async_create_task(self._async_sync_time_all())
-            self._schedule_time_sync()
-
-        self._time_sync_timer = async_call_later(
-            self.hass, TIME_SYNC_INTERVAL, _run_time_sync
-        )
-
-    async def _async_sync_time_all(self) -> None:
-        """Synchronize time to all TRVs in the room."""
-        _LOGGER.debug("Syncing time to all TRVs in room '%s'", self._room_name)
-
-        for trv_id in self._trv_ids:
-            try:
-                await self._backend.async_sync_time(trv_id)
-            except Exception:
-                _LOGGER.exception(
-                    "Failed to sync time to TRV %s in room '%s'",
-                    trv_id,
-                    self._room_name,
-                )
 
     # ── Schedule Entity Watching ──────────────────────────────────────────
 
@@ -1188,7 +944,7 @@ class RoomCoordinator:
 
         try:
             await self.async_program_schedule(schedule)
-        except Exception:
+        except Exception:  # noqa: BLE001
             _LOGGER.exception(
                 "Failed to program schedule from entity %s for room '%s'",
                 self._schedule_entity_id,
@@ -1385,7 +1141,279 @@ class RoomCoordinator:
                 _LOGGER.exception("Failed to set load_balancing_enable on %s", trv_id)
         self._notify_state_update()
 
-    # ── Schedule Programming ───────────────────────────────────────────
+    # ── Setpoint Coordination ──────────────────────────────────────────
+
+    async def _async_check_setpoint_coordination(
+        self, trv_id: str, old_state: TRVState, new_state: TRVState
+    ) -> None:
+        """Check if a TRV's setpoint changed due to manual dial turn.
+
+        Per Danfoss spec: When setpoint_change_source == 0x00 (manual),
+        forward the new setpoint to other room TRVs as Type 1 (aggressive).
+        Also syncs to remote climate if configured.
+        """
+        if self._programmatic_setpoint:
+            return  # We're the ones writing, ignore echo
+
+        new_setpoint = new_state.occupied_heating_setpoint
+        old_setpoint = old_state.occupied_heating_setpoint
+
+        if new_setpoint is None or new_setpoint == old_setpoint:
+            return  # No change
+
+        # Check if the change was manual
+        if new_state.setpoint_change_source != SETPOINT_SOURCE_MANUAL:
+            return
+
+        _LOGGER.info(
+            "Manual setpoint change on %s in room '%s': %.1f → %.1f°C",
+            trv_id,
+            self._room_name,
+            old_setpoint or 0,
+            new_setpoint,
+        )
+
+        # Forward to other TRVs as Type 1 (user interaction / aggressive)
+        if len(self._trv_ids) > 1:
+            async with self._setpoint_lock:
+                self._programmatic_setpoint = True
+                try:
+                    for other_trv in self._trv_ids:
+                        if other_trv == trv_id:
+                            continue
+                        try:
+                            await self._backend.async_send_setpoint_command(
+                                other_trv, new_setpoint, SETPOINT_TYPE_USER
+                            )
+                        except Exception:  # noqa: BLE001
+                            _LOGGER.exception(
+                                "Failed to forward setpoint to TRV %s", other_trv
+                            )
+                finally:
+                    self._programmatic_setpoint = False
+
+        # Update room state
+        self.state.target_temperature = new_setpoint
+        self._notify_state_update()
+
+        # Sync to remote climate if configured
+        await self._async_sync_remote_climate(new_setpoint)
+
+    async def async_set_room_temperature(self, temperature: float) -> None:
+        """Set target temperature for the entire room (from climate entity).
+
+        Uses OccupiedHeatingSetpoint write (Type 0 / gentle motor).
+        """
+        _LOGGER.debug(
+            "Setting room '%s' temperature to %.1f°C", self._room_name, temperature
+        )
+
+        async with self._setpoint_lock:
+            self._programmatic_setpoint = True
+            try:
+                for trv_id in self._trv_ids:
+                    try:
+                        await self._backend.async_set_occupied_heating_setpoint(
+                            trv_id, temperature
+                        )
+                    except Exception:  # noqa: BLE001
+                        _LOGGER.exception("Failed to set setpoint on TRV %s", trv_id)
+            finally:
+                self._programmatic_setpoint = False
+
+        self.state.target_temperature = temperature
+        self._notify_state_update()
+
+        # Sync to remote climate if configured
+        await self._async_sync_remote_climate(temperature)
+
+    # ── Window Open Coordination ───────────────────────────────────────
+
+    async def _async_check_window_coordination(
+        self, trv_id: str, trv_state: TRVState
+    ) -> None:
+        """Check and coordinate window open events across room TRVs.
+
+        Per Danfoss spec:
+        - When a TRV detects window open (state >= 3), force
+          external_window_open=true on other room TRVs.
+        - Deactivate (set false) when all forced TRVs report state 4.
+        """
+        if len(self._trv_ids) <= 1:
+            return
+
+        window_state = trv_state.window_open_detection
+        if window_state is None:
+            return
+
+        if window_state == WINDOW_OPEN_DETECTED:
+            # This TRV locally detected window open (state 3) - force other TRVs
+            # If this TRV was already forced by the coordinator, its local
+            # detection is redundant — don't cascade back or we deadlock
+            # (all TRVs end up in _forced and nobody can trigger deactivation).
+            if trv_id in self._forced_window_open_trvs:
+                _LOGGER.debug(
+                    "TRV %s in room '%s' reported state 3 but is already forced, "
+                    "skipping cascade",
+                    trv_id,
+                    self._room_name,
+                )
+                return
+            other_trvs = [t for t in self._trv_ids if t != trv_id]
+            newly_forced = [
+                t for t in other_trvs if t not in self._forced_window_open_trvs
+            ]
+
+            if newly_forced:
+                _LOGGER.info(
+                    "Window open detected on %s in room '%s', forcing %d other TRVs",
+                    trv_id,
+                    self._room_name,
+                    len(newly_forced),
+                )
+                for other_trv in newly_forced:
+                    try:
+                        await self._backend.async_set_external_window_open(
+                            other_trv, True
+                        )
+                        self._forced_window_open_trvs.add(other_trv)
+                    except Exception:  # noqa: BLE001
+                        _LOGGER.exception(
+                            "Failed to set external_window_open on %s", other_trv
+                        )
+        elif window_state == WINDOW_OPEN_EXTERNAL_OPEN:
+            # State 4: this TRV was forced open by the gateway.
+            # If it's not tracked in _forced_window_open_trvs (e.g. after HA
+            # restart), it's an orphan — clear it so the TRV can resume
+            # normal operation and re-detect if the window is still open.
+            if trv_id not in self._forced_window_open_trvs:
+                _LOGGER.info(
+                    "Clearing orphaned window_open_external on %s in room '%s' "
+                    "(not tracked after restart)",
+                    trv_id,
+                    self._room_name,
+                )
+                try:
+                    await self._backend.async_set_external_window_open(trv_id, False)
+                except Exception:  # noqa: BLE001
+                    _LOGGER.exception(
+                        "Failed to clear orphaned external_window_open on %s",
+                        trv_id,
+                    )
+        else:
+            # Check if all forced TRVs have reached state 4 (open confirmed)
+            # and we can deactivate. Only check TRVs that have reported state;
+            # skip forced TRVs not yet in trv_states to avoid creating
+            # phantom entries with None fields.
+            if self._forced_window_open_trvs:
+                forced_with_state = [
+                    t
+                    for t in self._forced_window_open_trvs
+                    if t in self.state.trv_states
+                ]
+                # Only proceed if we have state for at least one forced TRV
+                all_confirmed = len(forced_with_state) > 0 and all(
+                    self.state.trv_states[t].window_open_detection
+                    == WINDOW_OPEN_EXTERNAL_OPEN
+                    for t in forced_with_state
+                )
+                if all_confirmed:
+                    # Check if the detecting TRV(s) have closed
+                    any_still_open = any(
+                        (s.window_open_detection or 0) == WINDOW_OPEN_DETECTED
+                        for tid, s in self.state.trv_states.items()
+                        if tid not in self._forced_window_open_trvs
+                    )
+                    if not any_still_open:
+                        _LOGGER.info(
+                            "Window closed in room '%s', deactivating forced open",
+                            self._room_name,
+                        )
+                        for forced_trv in list(self._forced_window_open_trvs):
+                            try:
+                                await self._backend.async_set_external_window_open(
+                                    forced_trv, False
+                                )
+                            except Exception:  # noqa: BLE001
+                                _LOGGER.exception(
+                                    "Failed to clear external_window_open on %s",
+                                    forced_trv,
+                                )
+                        self._forced_window_open_trvs.clear()
+
+    # ── Preheat Coordination ──────────────────────────────────────────
+
+    async def _async_check_preheat_coordination(
+        self, trv_id: str, trv_state: TRVState
+    ) -> None:
+        """Check and coordinate preheat events across room TRVs.
+
+        Per Danfoss spec: When a TRV reports preheat_status=true and a
+        preheat_time, forward the preheat_time to other room TRVs via
+        PreHeatCommand. Deduplicates by tracking the last forwarded value
+        per TRV.
+        """
+        if len(self._trv_ids) <= 1:
+            return
+
+        if not trv_state.preheat_status or trv_state.preheat_time is None:
+            return
+
+        # Deduplicate: skip if we already forwarded this exact preheat_time
+        # from this TRV
+        last_forwarded = self._last_forwarded_preheat.get(trv_id)
+        if last_forwarded == trv_state.preheat_time:
+            return
+
+        self._last_forwarded_preheat[trv_id] = trv_state.preheat_time
+
+        _LOGGER.debug(
+            "Preheat detected on %s in room '%s' (time=%d), forwarding to other TRVs",
+            trv_id,
+            self._room_name,
+            trv_state.preheat_time,
+        )
+
+        for other_trv in self._trv_ids:
+            if other_trv == trv_id:
+                continue
+            try:
+                await self._backend.async_send_preheat_command(
+                    other_trv, trv_state.preheat_time
+                )
+            except Exception:  # noqa: BLE001
+                _LOGGER.exception("Failed to forward preheat to TRV %s", other_trv)
+
+    # ── Time Synchronization ──────────────────────────────────────────
+
+    def _schedule_time_sync(self) -> None:
+        """Schedule weekly time sync."""
+
+        @callback
+        def _run_time_sync(_now: Any) -> None:
+            self._time_sync_timer = None
+            self.hass.async_create_task(self._async_sync_time_all())
+            self._schedule_time_sync()
+
+        self._time_sync_timer = async_call_later(
+            self.hass, TIME_SYNC_INTERVAL, _run_time_sync
+        )
+
+    async def _async_sync_time_all(self) -> None:
+        """Synchronize time to all TRVs in the room."""
+        _LOGGER.debug("Syncing time to all TRVs in room '%s'", self._room_name)
+
+        for trv_id in self._trv_ids:
+            try:
+                await self._backend.async_sync_time(trv_id)
+            except Exception:  # noqa: BLE001
+                _LOGGER.exception(
+                    "Failed to sync time to TRV %s in room '%s'",
+                    trv_id,
+                    self._room_name,
+                )
+
+    # ── Schedule Management ────────────────────────────────────────────
 
     async def async_program_schedule(self, schedule: WeeklySchedule) -> None:
         """Program a weekly schedule to all TRVs in the room.
