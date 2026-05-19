@@ -918,11 +918,8 @@ class RoomCoordinator:
         if window_state is None:
             return
 
-        if (
-            window_state >= WINDOW_OPEN_DETECTED
-            and trv_id not in self._forced_window_open_trvs
-        ):
-            # This TRV detected window open - force other TRVs
+        if window_state == WINDOW_OPEN_DETECTED:
+            # This TRV locally detected window open (state 3) - force other TRVs
             other_trvs = [t for t in self._trv_ids if t != trv_id]
             newly_forced = [
                 t for t in other_trvs if t not in self._forced_window_open_trvs
@@ -945,6 +942,25 @@ class RoomCoordinator:
                         _LOGGER.exception(
                             "Failed to set external_window_open on %s", other_trv
                         )
+        elif window_state == WINDOW_OPEN_EXTERNAL_OPEN:
+            # State 4: this TRV was forced open by the gateway.
+            # If it's not tracked in _forced_window_open_trvs (e.g. after HA
+            # restart), it's an orphan — clear it so the TRV can resume
+            # normal operation and re-detect if the window is still open.
+            if trv_id not in self._forced_window_open_trvs:
+                _LOGGER.info(
+                    "Clearing orphaned window_open_external on %s in room '%s' "
+                    "(not tracked after restart)",
+                    trv_id,
+                    self._room_name,
+                )
+                try:
+                    await self._backend.async_set_external_window_open(trv_id, False)
+                except Exception:  # noqa: BLE001
+                    _LOGGER.exception(
+                        "Failed to clear orphaned external_window_open on %s",
+                        trv_id,
+                    )
         else:
             # Check if all forced TRVs have reached state 4 (open confirmed)
             # and we can deactivate. Only check TRVs that have reported state;
@@ -965,7 +981,7 @@ class RoomCoordinator:
                 if all_confirmed:
                     # Check if the detecting TRV(s) have closed
                     any_still_open = any(
-                        (s.window_open_detection or 0) >= WINDOW_OPEN_DETECTED
+                        (s.window_open_detection or 0) == WINDOW_OPEN_DETECTED
                         for tid, s in self.state.trv_states.items()
                         if tid not in self._forced_window_open_trvs
                     )
@@ -979,7 +995,7 @@ class RoomCoordinator:
                                 await self._backend.async_set_external_window_open(
                                     forced_trv, False
                                 )
-                            except Exception:
+                            except Exception:  # noqa: BLE001
                                 _LOGGER.exception(
                                     "Failed to clear external_window_open on %s",
                                     forced_trv,
