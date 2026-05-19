@@ -389,29 +389,6 @@ class RoomCoordinator:
         # Update aggregated room state
         self._update_room_state()
 
-        # Update per-TRV radiator_covered from TRV-reported state
-        if trv_state.radiator_covered is not None:
-            self._ext_temp_trv[trv_id].covered = trv_state.radiator_covered
-
-        # Update load estimate tracking
-        if trv_state.load_estimate is not None:
-            self._load_estimates[trv_id] = LoadEstimateEntry(
-                value=trv_state.load_estimate,
-                timestamp=time.monotonic(),
-            )
-
-        # Seed load_room_mean from TRV-reported value if the coordinator
-        # hasn't computed its own yet.
-        if self.state.load_room_mean is None and len(self._trv_ids) > 1:
-            raw_mean = trv_state.raw.get(Z2M_ATTR_LOAD_ROOM_MEAN)
-            if isinstance(raw_mean, int | float):
-                self.state.load_room_mean = int(raw_mean)
-                _LOGGER.debug(
-                    "Seeded load_room_mean from TRV %s: %d",
-                    trv_id,
-                    self.state.load_room_mean,
-                )
-
         # Check for setpoint coordination (manual dial change)
         if old_state is not None:
             self.hass.async_create_task(
@@ -428,6 +405,35 @@ class RoomCoordinator:
             self._async_check_preheat_coordination(trv_id, trv_state)
         )
 
+        # Update load estimate tracking
+        if trv_state.load_estimate is not None:
+            self._load_estimates[trv_id] = LoadEstimateEntry(
+                value=trv_state.load_estimate,
+                timestamp=time.monotonic(),
+            )
+
+        # Update per-TRV radiator_covered from TRV-reported state
+        if trv_state.radiator_covered is not None:
+            self._ext_temp_trv[trv_id].covered = trv_state.radiator_covered
+
+        # Seed load_room_mean from TRV-reported value if the coordinator
+        # hasn't computed its own yet.  This avoids a 15-minute "Unknown"
+        # period after startup for multi-TRV rooms.
+        # Reject disabled (-8000) and invalid (< -500) values per Danfoss spec.
+        if self.state.load_room_mean is None and len(self._trv_ids) > 1:
+            raw_mean = trv_state.raw.get(Z2M_ATTR_LOAD_ROOM_MEAN)
+            if (
+                isinstance(raw_mean, int | float)
+                and int(raw_mean) != LOAD_BALANCE_DISABLED_VALUE
+                and int(raw_mean) >= LOAD_BALANCE_INVALID_THRESHOLD
+            ):
+                self.state.load_room_mean = int(raw_mean)
+                _LOGGER.debug(
+                    "Seeded load_room_mean from TRV %s: %d",
+                    trv_id,
+                    self.state.load_room_mean,
+                )
+
         self._notify_state_update()
 
     def _update_room_state(self) -> None:
@@ -435,7 +441,7 @@ class RoomCoordinator:
         states = self.state.trv_states
 
         if not states:
-            return  # No TRV states yet
+            return
 
         # Current temperature: prefer external sensor
         if self._temp_sensor_id:
@@ -464,7 +470,7 @@ class RoomCoordinator:
                 self.state.target_temperature = trv.occupied_heating_setpoint
                 break
 
-        # Pi heating demand: max accross all TRVs
+        # Pi heating demand: max across all TRVs
         demands = [
             s.pi_heating_demand
             for s in states.values()

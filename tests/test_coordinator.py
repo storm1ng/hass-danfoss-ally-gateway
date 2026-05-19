@@ -602,7 +602,7 @@ class TestDeviceIdResolution:
         await coord.async_teardown()
 
 
-# ── Load Balancing ────────────────────────────────────────────────────
+## ── Load Balancing ────────────────────────────────────────────────────
 
 
 class TestLoadBalancing:
@@ -753,6 +753,34 @@ class TestLoadBalancing:
 
         trv_state = make_trv_state("trv_1", load_estimate=100)
         trv_state.raw = {"load_room_mean": 500}
+        mock_backend.fire_state_update("trv_1", trv_state)
+        await hass.async_block_till_done()
+
+        assert coord.state.load_room_mean is None
+        await coord.async_teardown()
+
+    async def test_seed_rejects_disabled_value(self, hass, mock_backend, subentry_data):
+        """Seeding should reject -8000 (disabled sentinel)."""
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        await coord.async_setup()
+
+        trv_state = make_trv_state("trv_1", load_estimate=100)
+        trv_state.raw = {"load_room_mean": -8000}
+        mock_backend.fire_state_update("trv_1", trv_state)
+        await hass.async_block_till_done()
+
+        assert coord.state.load_room_mean is None
+        await coord.async_teardown()
+
+    async def test_seed_rejects_below_threshold(
+        self, hass, mock_backend, subentry_data
+    ):
+        """Seeding should reject values below -500."""
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        await coord.async_setup()
+
+        trv_state = make_trv_state("trv_1", load_estimate=100)
+        trv_state.raw = {"load_room_mean": -600}
         mock_backend.fire_state_update("trv_1", trv_state)
         await hass.async_block_till_done()
 
