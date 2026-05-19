@@ -1,9 +1,10 @@
-"""Schedule data model for Danfoss Ally Gateway.
+"""Schedule management for Danfoss Ally Gateway.
 
-Data classes for representing weekly heating schedules:
-- ScheduleEvent: A single time+temperature transition
-- DaySchedule: Up to 6 events for one day
-- WeeklySchedule: 7 days with validation and serialization
+Implements full schedule programming via ZCL SetWeeklySchedule:
+- Data model for weekly schedules (7 days x up to 6 transitions each)
+- Midnight crossing logic per Danfoss spec
+- Serialization to/from ZCL SetWeeklySchedule payload format
+- Schedule comparison for read-back verification
 """
 
 from __future__ import annotations

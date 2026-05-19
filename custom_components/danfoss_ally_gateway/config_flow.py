@@ -1,6 +1,7 @@
 """Config flow for Danfoss Ally Gateway integration.
 
 Main config entry: Select backend (Z2M/ZHA), configure connection.
+Room subentries: Each room with TRVs, optional temp sensor, optional heat source.
 """
 
 from __future__ import annotations
@@ -103,6 +104,7 @@ class DanfossAllyGatewayConfigFlow(ConfigFlow, domain=DOMAIN):
             backend = user_input[CONF_BACKEND]
 
             if backend == BACKEND_Z2M:
+                # Store backend choice, proceed to Z2M config
                 self._backend = backend
                 return await self.async_step_z2m()
             if backend == BACKEND_ZHA:
@@ -137,6 +139,7 @@ class DanfossAllyGatewayConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             base_topic = user_input.get(CONF_MQTT_BASE_TOPIC, "zigbee2mqtt")
 
+            # Set unique ID based on backend + topic to prevent duplicates
             await self.async_set_unique_id(f"{BACKEND_Z2M}_{base_topic}")
             self._abort_if_unique_id_configured()
 
@@ -175,6 +178,7 @@ class DanfossAllyGatewayConfigFlow(ConfigFlow, domain=DOMAIN):
                 },
             )
 
+        # ZHA doesn't need extra config - just confirm
         return self.async_show_form(
             step_id="zha",
             data_schema=vol.Schema({}),
@@ -191,11 +195,16 @@ class DanfossAllyGatewayConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_reconfigure(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Handle reconfiguration of the main config entry."""
+        """Handle reconfiguration of the main config entry.
+
+        Allows changing the Z2M MQTT base topic. ZHA has no configurable
+        options, so reconfigure just confirms for ZHA.
+        """
         entry = self._get_reconfigure_entry()
         backend = entry.data.get(CONF_BACKEND, BACKEND_Z2M)
 
         if backend == BACKEND_ZHA:
+            # ZHA has nothing to reconfigure
             if user_input is not None:
                 return self.async_abort(reason="zha_no_options")
             return self.async_show_form(
@@ -204,6 +213,7 @@ class DanfossAllyGatewayConfigFlow(ConfigFlow, domain=DOMAIN):
                 description_placeholders={"backend": "ZHA"},
             )
 
+        # Z2M: allow changing the base topic
         errors: dict[str, str] = {}
         if user_input is not None:
             new_topic = user_input.get(CONF_MQTT_BASE_TOPIC, "zigbee2mqtt")
@@ -274,6 +284,7 @@ class RoomSubentryFlowHandler(ConfigSubentryFlow):
         config_entry = self._get_entry()
         backend = config_entry.data.get(CONF_BACKEND, BACKEND_Z2M)
 
+        # Build TRV device selector based on backend
         trv_selector = _build_trv_selector(backend)
 
         return self.async_show_form(
@@ -385,6 +396,7 @@ class RoomSubentryFlowHandler(ConfigSubentryFlow):
                 )
 
         backend = config_entry.data.get(CONF_BACKEND, BACKEND_Z2M)
+
         trv_selector = _build_trv_selector(backend)
 
         return self.async_show_form(
