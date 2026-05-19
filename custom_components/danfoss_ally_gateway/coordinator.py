@@ -943,6 +943,17 @@ class RoomCoordinator:
 
         if window_state == WINDOW_OPEN_DETECTED:
             # This TRV locally detected window open (state 3) - force other TRVs
+            # If this TRV was already forced by the coordinator, its local
+            # detection is redundant - dont' cascade back or we deadlock
+            # (all TRVs end up in _forced and nobody can trigger deactivation).
+            if trv_id in self._forced_window_open_trvs:
+                _LOGGER.debug(
+                    "TRV %s is room '%s' reported state 3 but is already forced, "
+                    "skipping cascade",
+                    trv_id,
+                    self._room_name,
+                )
+                return
             other_trvs = [t for t in self._trv_ids if t != trv_id]
             newly_forced = [
                 t for t in other_trvs if t not in self._forced_window_open_trvs
