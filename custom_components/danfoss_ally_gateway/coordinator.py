@@ -32,6 +32,7 @@ from homeassistant.core import (
     EventStateChangedData,
     HomeAssistant,
     callback,
+    split_entity_id,
 )
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.event import (
@@ -715,7 +716,7 @@ class RoomCoordinator:
             heat_available = entity_state.state == STATE_ON
         else:
             # Default: try to infer
-            if entity_state.domain == "climate":
+            if split_entity_id(entity_state.entity_id)[0] == "climate":
                 hvac_action = entity_state.attributes.get("hvac_action", "")
                 heat_available = hvac_action == "heating"
             else:
