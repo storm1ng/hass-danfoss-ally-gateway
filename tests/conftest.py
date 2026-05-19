@@ -45,6 +45,7 @@ class MockBackend(DanfossBackend):
     """
 
     # Satisfy ABC by defining all abstract methods at class level.
+    # These will be replaced by AsyncMock instances in __init__.
     async def async_set_external_temperature(self, trv_id, temperature):
         """Placeholder."""
 

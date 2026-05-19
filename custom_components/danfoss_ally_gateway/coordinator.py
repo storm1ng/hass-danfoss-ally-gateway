@@ -15,6 +15,8 @@ Implements per-room coordination logic:
 - Schedule entity watcher (auto-program from HA schedule helpers)
 """
 
+from __future__ import annotations
+
 import asyncio
 import contextlib
 import logging
@@ -64,6 +66,7 @@ from .const import (
     LOAD_BALANCE_INTERVAL,
     LOAD_BALANCE_INVALID_THRESHOLD,
     LOAD_BALANCE_MAX_AGE,
+    POWER_CYCLE_CHECK_INTERVAL,
     PROGRAMMING_MODE_FROM_INT,
     PROGRAMMING_MODE_TO_INT,
     REMOTE_CLIMATE_SUPPRESS_SECONDS,
@@ -74,6 +77,7 @@ from .const import (
     SCHEDULE_MODE_SCHEDULE_PREHEAT,
     SETPOINT_SOURCE_MANUAL,
     SETPOINT_TYPE_USER,
+    SW_ERROR_TIME_LOST,
     TIME_SYNC_INTERVAL,
     TRV_AVAILABILITY_TIMEOUT,
     WINDOW_OPEN_DETECTED,
@@ -202,6 +206,7 @@ class RoomCoordinator:
 
         self._current_schedule: WeeklySchedule | None = None  # Last programmed schedule
         self._schedule_mode: int = SCHEDULE_MODE_MANUAL  # Current programming mode
+        self._power_cycle_timer: CALLBACK_TYPE | None = None
 
     @property
     def room_name(self) -> str:
@@ -285,6 +290,7 @@ class RoomCoordinator:
                 self.hass, [self._temp_sensor_id], self._handle_temp_sensor_change
             )
             self._unsub_callbacks.append(unsub)
+            # Send initial temperature
             await self._async_send_initial_ext_temp()
 
         # Listen to heat source entity
@@ -293,6 +299,7 @@ class RoomCoordinator:
                 self.hass, [self._heat_source_id], self._handle_heat_source_change
             )
             self._unsub_callbacks.append(unsub)
+            # Set initial heat availability
             await self._async_update_heat_availability()
 
         # Listen to remote climate entity for bidirectional setpoint sync
@@ -312,12 +319,8 @@ class RoomCoordinator:
                 self._handle_schedule_entity_change,
             )
             self._unsub_callbacks.append(unsub)
-
             # Program initial schedule from the helper entity
             await self._async_sync_schedule_from_entity()
-
-        # Schedule weekly time sync
-        self._schedule_time_sync()
 
         # Start load balancing if enabled (default ON for multi-TRV rooms)
         if self._load_balancing_enabled:
@@ -333,23 +336,37 @@ class RoomCoordinator:
                         "Failed to set load_balancing_enable on %s", trv_id
                     )
 
+        # Start time sync timer
+        self._schedule_time_sync()
+
+        # Sync time on setup (required on join/rejoin)
+        await self._async_sync_time_all()
+
+        # Register device announce callback for power-cycle recovery
+        unsub = self._backend.register_announce_callback(self._handle_device_announce)
+        self._unsub_callbacks.append(unsub)
+
+        # Start power-cycle detection timer (fallback for missed announces)
+        self._schedule_power_cycle_check()
+
     async def async_teardown(self) -> None:
         """Tear down the room coordinator."""
         _LOGGER.info("Tearing down room coordinator for '%s'", self._room_name)
 
-        # Cancel all per-TRV ext temp timers
+        # Cancel all timers
         for ext_state in self._ext_temp_trv.values():
             if ext_state.timer is not None:
                 ext_state.timer()
                 ext_state.timer = None
-
         if self._load_balance_timer is not None:
             self._load_balance_timer()
             self._load_balance_timer = None
-
         if self._time_sync_timer is not None:
             self._time_sync_timer()
             self._time_sync_timer = None
+        if self._power_cycle_timer is not None:
+            self._power_cycle_timer()
+            self._power_cycle_timer = None
 
         # Unsubscribe from everything
         for unsub in self._unsub_callbacks:
@@ -898,7 +915,7 @@ class RoomCoordinator:
             await self.hass.services.async_call(
                 "climate", "set_temperature", service_data
             )
-        except Exception:  # noqa: BLE001
+        except Exception:
             _LOGGER.exception(
                 "Failed to sync setpoint to remote climate %s in room '%s'",
                 self._remote_climate_id,
@@ -944,7 +961,7 @@ class RoomCoordinator:
                             other_trv, True
                         )
                         self._forced_window_open_trvs.add(other_trv)
-                    except Exception:  # noqa: BLE001
+                    except Exception:
                         _LOGGER.exception(
                             "Failed to set external_window_open on %s", other_trv
                         )
@@ -962,7 +979,7 @@ class RoomCoordinator:
                 )
                 try:
                     await self._backend.async_set_external_window_open(trv_id, False)
-                except Exception:  # noqa: BLE001
+                except Exception:
                     _LOGGER.exception(
                         "Failed to clear orphaned external_window_open on %s",
                         trv_id,
@@ -1073,11 +1090,16 @@ class RoomCoordinator:
         for trv_id in self._trv_ids:
             try:
                 await self._backend.async_sync_time(trv_id)
-            except Exception:  # noqa: BLE001
-                _LOGGER.exception("Failed to sync time to TRV %s", trv_id)
+            except Exception:
+                _LOGGER.exception(
+                    "Failed to sync time to TRV %s in room '%s'",
+                    trv_id,
+                    self._room_name,
+                )
 
-    # ── Schedule Entity Watcher ────────────────────────────────────────
+    # ── Schedule Entity Watching ──────────────────────────────────────────
 
+    @callback
     def _handle_schedule_entity_change(
         self, event: Event[EventStateChangedData]
     ) -> None:
@@ -1155,7 +1177,7 @@ class RoomCoordinator:
 
         try:
             await self.async_program_schedule(schedule)
-        except Exception:  # noqa: BLE001
+        except Exception:
             _LOGGER.exception(
                 "Failed to program schedule from entity %s for room '%s'",
                 self._schedule_entity_id,
@@ -1526,3 +1548,200 @@ class RoomCoordinator:
         # Set manual mode
         await self.async_set_schedule_mode(enabled=False)
         self._current_schedule = None
+
+    # ── Power Cycle Detection ──────────────────────────────────────────
+
+    @callback
+    def _handle_device_announce(self, trv_id: str) -> None:
+        """Handle a device announce (rejoin) event from the backend.
+
+        Triggers schedule verification and recovery after a short delay
+        to allow upstream time sync to complete first.
+        """
+        if trv_id not in self._trv_ids:
+            return
+        _LOGGER.info(
+            "Device announce received for TRV %s in room '%s'. "
+            "Scheduling power-cycle recovery check.",
+            trv_id,
+            self._room_name,
+        )
+
+        # Delay 5s to let upstream danfossTimeSyncOnAnnounce complete time sync
+        async def _rejoin_cb(_now: Any) -> None:
+            await self._async_handle_device_rejoin(trv_id)
+
+        async_call_later(self.hass, 5, _rejoin_cb)
+
+    async def _async_handle_device_rejoin(self, trv_id: str) -> None:
+        """Handle TRV rejoin: restore settings lost after power cycle.
+
+        Per Danfoss spec: schedule information, load balancing enable,
+        and other settings may be lost after battery change / power cycle.
+        """
+        # ── Schedule recovery ──
+        if self._current_schedule is not None:
+            # Verify schedule by reading Monday (day_of_week=0x02)
+            try:
+                transitions = await self._backend.async_get_weekly_schedule(
+                    trv_id, 0x02
+                )
+            except Exception:  # noqa: BLE001
+                _LOGGER.debug(
+                    "Failed to read schedule from TRV %s after rejoin", trv_id
+                )
+                transitions = None
+
+            if not transitions:
+                _LOGGER.warning(
+                    "TRV %s in room '%s' lost schedule after power cycle. "
+                    "Re-programming schedule and restoring settings.",
+                    trv_id,
+                    self._room_name,
+                )
+                try:
+                    await self._async_reprogram_single_trv(trv_id)
+                except Exception:  # noqa: BLE001
+                    _LOGGER.exception(
+                        "Failed to re-program schedule on TRV %s after rejoin",
+                        trv_id,
+                    )
+
+                # Re-apply programming mode
+                if self._schedule_mode != SCHEDULE_MODE_MANUAL:
+                    try:
+                        await self._backend.async_set_programming_mode(
+                            trv_id, self._schedule_mode
+                        )
+                    except Exception:  # noqa: BLE001
+                        _LOGGER.exception(
+                            "Failed to re-set programming mode on TRV %s after rejoin",
+                            trv_id,
+                        )
+
+        # Re-send external temperature if configured
+        if self._temp_sensor_id:
+            temp_state = self.hass.states.get(self._temp_sensor_id)
+            if temp_state and temp_state.state not in ("unavailable", "unknown"):
+                try:
+                    temp = float(temp_state.state)
+                    await self._backend.async_set_external_temperature(trv_id, temp)
+                except (ValueError, Exception):  # noqa: BLE001
+                    _LOGGER.debug(
+                        "Failed to re-send external temp to TRV %s after rejoin",
+                        trv_id,
+                    )
+
+        # Restore load_balancing_enable if load balancing is active
+        if self._load_balancing_enabled:
+            try:
+                await self._backend.async_set_load_balancing_enable(trv_id, True)
+            except Exception:  # noqa: BLE001
+                _LOGGER.debug(
+                    "Failed to re-set load_balancing_enable on TRV %s after rejoin",
+                    trv_id,
+                )
+
+    def _schedule_power_cycle_check(self) -> None:
+        """Schedule periodic power-cycle detection check (fallback)."""
+
+        @callback
+        def _run_power_cycle_check(_now: Any) -> None:
+            self._power_cycle_timer = None
+            self.hass.async_create_task(self._async_check_power_cycle())
+            self._schedule_power_cycle_check()
+
+        self._power_cycle_timer = async_call_later(
+            self.hass, POWER_CYCLE_CHECK_INTERVAL, _run_power_cycle_check
+        )
+
+    async def _async_check_power_cycle(self) -> None:
+        """Fallback: check all TRVs for schedule loss via GetWeeklySchedule.
+
+        This is a fallback for cases where the device_announce event was
+        missed (e.g. HA restart during TRV rejoin). Checks if the schedule
+        is still present on the TRV; if not, triggers recovery.
+
+        Also checks system_status_code for E10 as an additional indicator.
+        """
+        if self._current_schedule is None:
+            return  # Nothing to verify
+
+        for trv_id in self._trv_ids:
+            # First check E10 (fast, no Zigbee traffic if not set)
+            try:
+                error_code = await self._backend.async_read_sw_error_code(trv_id)
+            except Exception:  # noqa: BLE001
+                error_code = None
+
+            if error_code and SW_ERROR_TIME_LOST in error_code:
+                _LOGGER.warning(
+                    "TRV %s in room '%s' reports time lost (E10). "
+                    "Triggering power-cycle recovery.",
+                    trv_id,
+                    self._room_name,
+                )
+                # Time sync (belt-and-suspenders, upstream should have done it)
+                try:
+                    await self._backend.async_sync_time(trv_id)
+                except Exception:  # noqa: BLE001
+                    _LOGGER.exception("Failed to re-sync time to TRV %s", trv_id)
+                await self._async_handle_device_rejoin(trv_id)
+                continue
+
+            # Verify schedule is still present (catches silent resets)
+            try:
+                transitions = await self._backend.async_get_weekly_schedule(
+                    trv_id, 0x02
+                )
+            except Exception:  # noqa: BLE001
+                continue  # Can't verify, skip
+
+            if not transitions:
+                _LOGGER.warning(
+                    "TRV %s in room '%s' has empty schedule (power cycle?). "
+                    "Triggering recovery.",
+                    trv_id,
+                    self._room_name,
+                )
+                await self._async_handle_device_rejoin(trv_id)
+
+    async def _async_reprogram_single_trv(self, trv_id: str) -> None:
+        """Re-program the current schedule on a single TRV.
+
+        Used after power-cycle detection to restore the schedule.
+        """
+        if self._current_schedule is None:
+            return
+
+        # Clear first
+        try:
+            await self._backend.async_clear_weekly_schedule(trv_id)
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception("Failed to clear schedule on TRV %s", trv_id)
+
+        # Apply midnight crossing and build payloads
+        processed = apply_midnight_crossing(self._current_schedule)
+        payloads = build_zcl_set_weekly_payloads(processed)
+
+        for payload in payloads:
+            try:
+                await self._backend.async_set_weekly_schedule(
+                    trv_id,
+                    day_of_week=payload["day_of_week"],
+                    num_transitions=payload["num_transitions"],
+                    mode=payload["mode"],
+                    transitions=payload["transitions"],
+                )
+            except Exception:  # noqa: BLE001
+                _LOGGER.exception(
+                    "Failed to re-program schedule day 0x%02X on TRV %s",
+                    payload["day_of_week"],
+                    trv_id,
+                )
+
+        _LOGGER.info(
+            "Re-programmed schedule on TRV %s in room '%s'",
+            trv_id,
+            self._room_name,
+        )

@@ -484,6 +484,210 @@ class TestSetpointCoordination:
         await coord.async_teardown()
 
 
+# ── Power Cycle Detection ─────────────────────────────────────────────
+
+
+class TestPowerCycleDetection:
+    """Tests for power-cycle detection and schedule recovery."""
+
+    async def test_power_cycle_timer_scheduled(self, hass, mock_backend, subentry_data):
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        await coord.async_setup()
+        assert coord._power_cycle_timer is not None
+        await coord.async_teardown()
+
+    async def test_power_cycle_timer_cancelled_on_teardown(
+        self, hass, mock_backend, subentry_data
+    ):
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        await coord.async_setup()
+        await coord.async_teardown()
+        assert coord._power_cycle_timer is None
+
+    async def test_power_cycle_e10_triggers_recovery(
+        self, hass, mock_backend, subentry_data
+    ):
+        """E10 detected via poll triggers time sync and schedule recovery."""
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        await coord.async_setup()
+
+        # Program a schedule first
+        ws = WeeklySchedule()
+        ws.days[1] = DaySchedule(events=[ScheduleEvent(360, 21.0)])
+        await coord.async_program_schedule(ws)
+
+        mock_backend.async_clear_weekly_schedule.reset_mock()
+        mock_backend.async_set_weekly_schedule.reset_mock()
+        mock_backend.async_sync_time.reset_mock()
+
+        # Simulate E10 + empty schedule on TRV
+        mock_backend.async_read_sw_error_code.return_value = "invalid_clock_information"
+        mock_backend.async_get_weekly_schedule.return_value = None
+
+        await coord._async_check_power_cycle()
+
+        # Should re-sync time for both TRVs
+        assert mock_backend.async_sync_time.call_count == 2
+        # Should clear and re-program for each TRV
+        assert mock_backend.async_clear_weekly_schedule.call_count == 2
+        assert mock_backend.async_set_weekly_schedule.call_count >= 2
+        await coord.async_teardown()
+
+    async def test_power_cycle_schedule_empty_triggers_recovery(
+        self, hass, mock_backend, subentry_data
+    ):
+        """Empty schedule on TRV (without E10) triggers recovery."""
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        await coord.async_setup()
+
+        # Program a schedule first
+        ws = WeeklySchedule()
+        ws.days[1] = DaySchedule(events=[ScheduleEvent(360, 21.0)])
+        await coord.async_program_schedule(ws)
+
+        mock_backend.async_clear_weekly_schedule.reset_mock()
+        mock_backend.async_set_weekly_schedule.reset_mock()
+
+        # No E10, but schedule is empty on TRV
+        mock_backend.async_read_sw_error_code.return_value = "ok"
+        mock_backend.async_get_weekly_schedule.return_value = None
+
+        await coord._async_check_power_cycle()
+
+        # Should re-program for each TRV
+        assert mock_backend.async_clear_weekly_schedule.call_count == 2
+        assert mock_backend.async_set_weekly_schedule.call_count >= 2
+        await coord.async_teardown()
+
+    async def test_no_power_cycle_schedule_present(
+        self, hass, mock_backend, subentry_data
+    ):
+        """No action when schedule is still present on TRV."""
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        await coord.async_setup()
+
+        # Program a schedule
+        ws = WeeklySchedule()
+        ws.days[1] = DaySchedule(events=[ScheduleEvent(360, 21.0)])
+        await coord.async_program_schedule(ws)
+
+        mock_backend.async_clear_weekly_schedule.reset_mock()
+        mock_backend.async_set_weekly_schedule.reset_mock()
+        mock_backend.async_sync_time.reset_mock()
+
+        # No E10, schedule still present
+        mock_backend.async_read_sw_error_code.return_value = "ok"
+        mock_backend.async_get_weekly_schedule.return_value = [(360, 2100)]
+
+        await coord._async_check_power_cycle()
+
+        # Should not re-sync or re-program
+        mock_backend.async_sync_time.assert_not_called()
+        mock_backend.async_clear_weekly_schedule.assert_not_called()
+        await coord.async_teardown()
+
+    async def test_no_schedule_stored_skips_check(
+        self, hass, mock_backend, subentry_data
+    ):
+        """No verification when no schedule is stored."""
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        await coord.async_setup()
+        mock_backend.async_sync_time.reset_mock()
+
+        assert coord._current_schedule is None
+        mock_backend.async_read_sw_error_code.return_value = "ok"
+
+        await coord._async_check_power_cycle()
+
+        # Should not call anything
+        mock_backend.async_sync_time.assert_not_called()
+        mock_backend.async_get_weekly_schedule.assert_not_called()
+        await coord.async_teardown()
+
+    async def test_device_announce_triggers_recovery(
+        self, hass, mock_backend, subentry_data
+    ):
+        """Device announce fires recovery after delay."""
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        await coord.async_setup()
+
+        # Program a schedule
+        ws = WeeklySchedule()
+        ws.days[1] = DaySchedule(events=[ScheduleEvent(360, 21.0)])
+        await coord.async_program_schedule(ws)
+
+        mock_backend.async_clear_weekly_schedule.reset_mock()
+        mock_backend.async_set_weekly_schedule.reset_mock()
+
+        # Simulate empty schedule on TRV after rejoin
+        mock_backend.async_get_weekly_schedule.return_value = None
+
+        # Directly call the rejoin handler (skip the 5s delay for testing)
+        trv_id = coord._trv_ids[0]
+        await coord._async_handle_device_rejoin(trv_id)
+
+        # Should re-program
+        assert mock_backend.async_clear_weekly_schedule.call_count == 1
+        assert mock_backend.async_set_weekly_schedule.call_count >= 1
+        await coord.async_teardown()
+
+    async def test_device_announce_no_recovery_if_schedule_present(
+        self, hass, mock_backend, subentry_data
+    ):
+        """No recovery if schedule is still present after announce."""
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        await coord.async_setup()
+
+        # Program a schedule
+        ws = WeeklySchedule()
+        ws.days[1] = DaySchedule(events=[ScheduleEvent(360, 21.0)])
+        await coord.async_program_schedule(ws)
+
+        mock_backend.async_clear_weekly_schedule.reset_mock()
+        mock_backend.async_set_weekly_schedule.reset_mock()
+
+        # Schedule still present on TRV
+        mock_backend.async_get_weekly_schedule.return_value = [(360, 2100)]
+
+        trv_id = coord._trv_ids[0]
+        await coord._async_handle_device_rejoin(trv_id)
+
+        # Should NOT re-program
+        mock_backend.async_clear_weekly_schedule.assert_not_called()
+        mock_backend.async_set_weekly_schedule.assert_not_called()
+        await coord.async_teardown()
+
+    async def test_device_announce_callback_registered(
+        self, hass, mock_backend, subentry_data
+    ):
+        """Announce callback is registered during setup."""
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        await coord.async_setup()
+
+        # Backend should have announce callbacks registered
+        assert len(mock_backend._announce_callbacks) > 0
+        await coord.async_teardown()
+
+    async def test_rejoin_restores_load_balancing_enable(
+        self, hass, mock_backend, subentry_data
+    ):
+        """Device rejoin re-writes load_balancing_enable if enabled."""
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        await coord.async_setup()
+
+        mock_backend.async_set_load_balancing_enable.reset_mock()
+        mock_backend.async_get_weekly_schedule.return_value = None
+
+        trv_id = coord._trv_ids[0]
+        await coord._async_handle_device_rejoin(trv_id)
+
+        # Should have re-written load_balancing_enable=true
+        mock_backend.async_set_load_balancing_enable.assert_called_once_with(
+            trv_id, True
+        )
+        await coord.async_teardown()
+
+
 # ── Device ID Resolution ──────────────────────────────────────────────
 
 
@@ -1278,7 +1482,7 @@ class TestTimeSync:
 
         await coord._async_sync_time_all()
 
-        assert mock_backend.async_sync_time.call_count == 2
+        assert mock_backend.async_sync_time.call_count == 4
         mock_backend.async_sync_time.assert_any_call("trv_1")
         mock_backend.async_sync_time.assert_any_call("trv_2")
         await coord.async_teardown()
@@ -1291,7 +1495,7 @@ class TestTimeSync:
         mock_backend.async_sync_time.side_effect = [Exception("fail"), None]
         await coord._async_sync_time_all()
 
-        assert mock_backend.async_sync_time.call_count == 2
+        assert mock_backend.async_sync_time.call_count == 4
         await coord.async_teardown()
 
 
