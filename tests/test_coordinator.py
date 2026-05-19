@@ -746,6 +746,68 @@ class TestLoadBalancing:
         assert coord.state.load_room_mean is None
         await coord.async_teardown()
 
+    async def test_enable_load_balancing(self, hass, mock_backend, subentry_data):
+        """async_enable_load_balancing writes to all TRVs and starts timer."""
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        await coord.async_setup()
+
+        # Disable first, then re-enable
+        await coord.async_disable_load_balancing()
+        assert coord._load_balance_timer is None
+        assert coord.state.load_balancing_enabled is False
+
+        mock_backend.async_set_load_balancing_enable.reset_mock()
+        await coord.async_enable_load_balancing()
+        assert coord.state.load_balancing_enabled is True
+        assert coord._load_balance_timer is not None
+        assert mock_backend.async_set_load_balancing_enable.call_count == 2
+        for call in mock_backend.async_set_load_balancing_enable.call_args_list:
+            assert call[0][1] is True
+        await coord.async_teardown()
+
+    async def test_disable_load_balancing(self, hass, mock_backend, subentry_data):
+        """async_disable_load_balancing sends -8000 and stops timer."""
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        await coord.async_setup()
+
+        await coord.async_disable_load_balancing()
+
+        assert coord.state.load_balancing_enabled is False
+        assert coord.state.load_room_mean is None
+        assert coord._load_balance_timer is None
+        # Should have sent -8000 to both TRVs
+        assert mock_backend.async_set_load_room_mean.call_count == 2
+        for call in mock_backend.async_set_load_room_mean.call_args_list:
+            assert call[0][1] == LOAD_BALANCE_DISABLED_VALUE
+        await coord.async_teardown()
+
+    async def test_setup_writes_load_balancing_enable_to_trvs(
+        self, hass, mock_backend, subentry_data
+    ):
+        """On setup, multi-TRV rooms write load_balancing_enable=true to all TRVs."""
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        await coord.async_setup()
+
+        assert mock_backend.async_set_load_balancing_enable.call_count == 2
+        calls = mock_backend.async_set_load_balancing_enable.call_args_list
+        trv_ids_called = {c[0][0] for c in calls}
+        assert trv_ids_called == {"trv_1", "trv_2"}
+        for call in calls:
+            assert call[0][1] is True
+        assert coord.state.load_balancing_enabled is True
+        await coord.async_teardown()
+
+    async def test_single_trv_no_load_balancing_enabled(
+        self, hass, mock_backend, single_trv_subentry_data
+    ):
+        """Single-TRV rooms should not enable load balancing."""
+        coord = RoomCoordinator(hass, mock_backend, single_trv_subentry_data)
+        await coord.async_setup()
+
+        mock_backend.async_set_load_balancing_enable.assert_not_called()
+        assert coord.state.load_balancing_enabled is False
+        await coord.async_teardown()
+
 
 # ── Window Coordination ──────────────────────────────────────────────
 

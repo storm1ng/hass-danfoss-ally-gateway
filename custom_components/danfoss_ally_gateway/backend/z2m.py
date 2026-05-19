@@ -296,6 +296,10 @@ class Z2MBackend(DanfossBackend):
         """Write LoadRoomMean to TRV."""
         await self._async_set(trv_id, {Z2M_ATTR_LOAD_ROOM_MEAN: value})
 
+    async def async_set_load_balancing_enable(self, trv_id: str, enable: bool) -> None:
+        """Write LoadBalancingEnable to TRV."""
+        await self._async_set(trv_id, {Z2M_ATTR_LOAD_BALANCING_ENABLE: enable})
+
     async def async_set_external_window_open(self, trv_id: str, is_open: bool) -> None:
         """Write ExternalOpenWindowDetected to TRV."""
         await self._async_set(trv_id, {Z2M_ATTR_EXTERNAL_WINDOW_OPEN: is_open})

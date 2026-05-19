@@ -144,5 +144,10 @@
                 "pause": "Pause"
             }
         }
+    },
+    "switch": {
+        "load_balancing": {
+            "name": "Load Balancing"
+        }
     }
 }

@@ -20,6 +20,7 @@ from custom_components.danfoss_ally_gateway.const import (
     Z2M_ATTR_EXTERNAL_MEASURED_ROOM_SENSOR,
     Z2M_ATTR_EXTERNAL_WINDOW_OPEN,
     Z2M_ATTR_HEAT_AVAILABLE,
+    Z2M_ATTR_LOAD_BALANCING_ENABLE,
     Z2M_ATTR_LOAD_ESTIMATE,
     Z2M_ATTR_LOAD_ROOM_MEAN,
     Z2M_ATTR_LOCAL_TEMPERATURE,
@@ -476,6 +477,13 @@ class TestZ2MAttributeWrites:
         await backend.async_set_load_room_mean("trv1", 150)
         payload = json.loads(mock_mqtt.async_publish.call_args[0][2])
         assert payload[Z2M_ATTR_LOAD_ROOM_MEAN] == 150
+
+    @patch("custom_components.danfoss_ally_gateway.backend.z2m.mqtt")
+    async def test_set_load_balancing_enable(self, mock_mqtt, backend):
+        mock_mqtt.async_publish = AsyncMock()
+        await backend.async_set_load_balancing_enable("trv1", True)
+        payload = json.loads(mock_mqtt.async_publish.call_args[0][2])
+        assert payload[Z2M_ATTR_LOAD_BALANCING_ENABLE] is True
 
     @patch("custom_components.danfoss_ally_gateway.backend.z2m.mqtt")
     async def test_set_external_window_open(self, mock_mqtt, backend):

@@ -171,4 +171,4 @@ Z2M_ATTR_LOCAL_TEMPERATURE: Final = "local_temperature"
 Z2M_ATTR_PROGRAMMING_MODE: Final = "programming_operation_mode"
 
 # ── Platforms ──────────────────────────────────────────────────────────
-PLATFORMS: Final = ["climate", "binary_sensor", "sensor", "select"]
+PLATFORMS: Final = ["climate", "binary_sensor", "sensor", "select", "switch"]

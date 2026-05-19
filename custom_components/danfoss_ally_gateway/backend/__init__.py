@@ -138,6 +138,10 @@ class DanfossBackend(abc.ABC):
         """Write LoadRoomMean to TRV."""
 
     @abc.abstractmethod
+    async def async_set_load_balancing_enable(self, trv_id: str, enable: bool) -> None:
+        """Write LoadBalancingEnable to TRV."""
+
+    @abc.abstractmethod
     async def async_set_external_window_open(self, trv_id: str, is_open: bool) -> None:
         """Write ExternalOpenWindowDetected to TRV."""
 

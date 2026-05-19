@@ -121,6 +121,7 @@ class RoomState:
     heat_available: bool | None = None
     window_open: bool = False
     load_room_mean: int | None = None
+    load_balancing_enabled: bool = False  # Whether load balancing is active
     available: bool = False  # True when at least one TRV has reported recently
     trv_states: dict[str, TRVState] = field(default_factory=dict)
 
@@ -181,6 +182,7 @@ class RoomCoordinator:
         # Load balancing tracking
         self._load_estimates: dict[str, LoadEstimateEntry] = {}
         self._load_balance_timer: CALLBACK_TYPE | None = None
+        self._load_balancing_enabled: bool = len(self._trv_ids) > 1
 
         # Setpoint coordination
         self._setpoint_lock = asyncio.Lock()
@@ -316,9 +318,19 @@ class RoomCoordinator:
         # Schedule weekly time sync
         self._schedule_time_sync()
 
-        # Start load balancing timer (only for multi-TRV rooms)
-        if len(self._trv_ids) > 1:
+        # Start load balancing if enabled (default ON for multi-TRV rooms)
+        if self._load_balancing_enabled:
+            self.state.load_balancing_enabled = True
             self._schedule_load_balance()
+            # Write load_balancing_enable=true to all TRVs to ensure
+            # the attribute is set (may be lost after battery change).
+            for trv_id in self._trv_ids:
+                try:
+                    await self._backend.async_set_load_balancing_enable(trv_id, True)
+                except Exception:  # noqa: BLE001
+                    _LOGGER.exception(
+                        "Failed to set load_balancing_enable on %s", trv_id
+                    )
 
     async def async_teardown(self) -> None:
         """Tear down the room coordinator."""
@@ -1256,6 +1268,54 @@ class RoomCoordinator:
             except Exception:  # noqa: BLE001
                 _LOGGER.exception("Failed to set load_room_mean on TRV %s", trv_id)
 
+        self._notify_state_update()
+
+    async def async_enable_load_balancing(self) -> None:
+        """Enable load balancing for this room.
+
+        Writes load_balancing_enable=true to all TRVs and starts the
+        periodic load balance timer.
+        """
+        if len(self._trv_ids) <= 1:
+            return
+        self._load_balancing_enabled = True
+        self.state.load_balancing_enabled = True
+        for trv_id in self._trv_ids:
+            try:
+                await self._backend.async_set_load_balancing_enable(trv_id, True)
+            except Exception:  # noqa: BLE001
+                _LOGGER.exception("Failed to set load_balancing_enable on %s", trv_id)
+        if self._load_balance_timer is None:
+            self._schedule_load_balance()
+        self._notify_state_update()
+
+    async def async_disable_load_balancing(self) -> None:
+        """Disable load balancing for this room.
+
+        Sends load_room_mean=-8000 (disabled) to all TRVs per Danfoss spec,
+        writes load_balancing_enable=false, and stops the timer.
+        """
+        self._load_balancing_enabled = False
+        self.state.load_balancing_enabled = False
+        self.state.load_room_mean = None
+        # Cancel timer
+        if self._load_balance_timer is not None:
+            self._load_balance_timer()
+            self._load_balance_timer = None
+        # Send disabled value to all TRVs
+        for trv_id in self._trv_ids:
+            try:
+                await self._backend.async_set_load_room_mean(
+                    trv_id, LOAD_BALANCE_DISABLED_VALUE
+                )
+            except Exception:  # noqa: BLE001
+                _LOGGER.exception(
+                    "Failed to send disabled load_room_mean to %s", trv_id
+                )
+            try:
+                await self._backend.async_set_load_balancing_enable(trv_id, False)
+            except Exception:  # noqa: BLE001
+                _LOGGER.exception("Failed to set load_balancing_enable on %s", trv_id)
         self._notify_state_update()
 
     # ── Schedule Programming ───────────────────────────────────────────
