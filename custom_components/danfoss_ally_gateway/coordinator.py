@@ -1663,7 +1663,10 @@ class RoomCoordinator:
         # Re-send external temperature if configured
         if self._temp_sensor_id:
             temp_state = self.hass.states.get(self._temp_sensor_id)
-            if temp_state and temp_state.state not in ("unavailable", "unknown"):
+            if temp_state and temp_state.state not in (
+                STATE_UNAVAILABLE,
+                STATE_UNKNOWN,
+            ):
                 try:
                     temp = float(temp_state.state)
                     await self._backend.async_set_external_temperature(trv_id, temp)
