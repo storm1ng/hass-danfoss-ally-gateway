@@ -198,6 +198,5 @@ pyrightconfig.json
 .DS_Store
 Thumbs.db
 
-# Home Assistant dev config (keep configuration.yaml tracked)
-config/*
-!config/configuration.yaml
+# Home Assistant dev config
+config/
