@@ -130,6 +130,7 @@ def _parse_bool(value: Any) -> bool | None:
         if lower in ("false", "0", "off", "no"):
             return False
         # Catch-all for unexpected strings like "No Heat Available"
+        _LOGGER.warning("Unexpected string value for boolean attribute: %r", value)
         return False
     return None
 
