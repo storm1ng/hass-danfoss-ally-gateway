@@ -1,0 +1,42 @@
+name: HA Compatibility
+
+on:
+  schedule:
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compatibility:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - homeassistant-version: "2025.6.0"
+            label: "minimum (2025.6.0)"
+          - homeassistant-version: ""
+            label: "latest stable"
+    name: "HA ${{ matrix.label }}"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements_test.txt
+          if [ -n "${{ matrix.homeassistant-version }}" ]; then
+            pip install homeassistant==${{ matrix.homeassistant-version }}
+          else
+            pip install homeassistant
+          fi
+
+      - name: Run tests
+        run: pytest tests/ --cov=custom_components/danfoss_ally_gateway --cov-report=term-missing
