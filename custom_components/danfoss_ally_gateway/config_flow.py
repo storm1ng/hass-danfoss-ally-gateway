@@ -259,6 +259,117 @@ class DanfossAllyGatewayConfigFlow(ConfigFlow, domain=DOMAIN):
         )
 
 
+def _extract_room_data(user_input: dict[str, Any]) -> dict[str, Any]:
+    """Extract room configuration data from user input."""
+    return {
+        CONF_ROOM_NAME: user_input[CONF_ROOM_NAME],
+        CONF_AREA: user_input.get(CONF_AREA, ""),
+        CONF_TRV_ENTITIES: user_input[CONF_TRV_ENTITIES],
+        CONF_TEMP_SENSOR: user_input.get(CONF_TEMP_SENSOR, ""),
+        CONF_HEAT_SOURCE: user_input.get(CONF_HEAT_SOURCE, ""),
+        CONF_HEAT_SOURCE_TYPE: user_input.get(CONF_HEAT_SOURCE_TYPE, ""),
+        CONF_REMOTE_CLIMATE: user_input.get(CONF_REMOTE_CLIMATE, ""),
+        CONF_SCHEDULE_ENTITY: user_input.get(CONF_SCHEDULE_ENTITY, ""),
+        CONF_AT_HOME_TEMP: user_input.get(CONF_AT_HOME_TEMP, DEFAULT_AT_HOME_TEMP),
+        CONF_AWAY_TEMP: user_input.get(CONF_AWAY_TEMP, DEFAULT_AWAY_TEMP),
+        CONF_PREHEAT_ENABLED: user_input.get(CONF_PREHEAT_ENABLED, True),
+    }
+
+
+def _build_room_schema(
+    backend: str,
+    defaults: dict[str, Any] | None = None,
+) -> vol.Schema:
+    """Build the room configuration schema.
+
+    Args:
+        backend: The backend type (Z2M or ZHA).
+        defaults: Existing room data for pre-populating fields during
+            reconfigure. When None, fields use their initial defaults.
+
+    """
+    trv_selector = _build_trv_selector(backend)
+    is_reconfigure = defaults is not None
+
+    def _field(
+        key: str,
+        required: bool = False,
+        default: Any = vol.UNDEFINED,
+    ) -> vol.Optional | vol.Required:
+        """Build a schema field, using suggested_value for reconfigure.
+
+        For required fields and optional fields with an explicit default
+        (numbers, booleans), uses ``default=`` to pre-fill the value.
+        For purely optional fields (entities, areas), uses
+        ``suggested_value`` so the field can be left empty.
+        """
+        cls = vol.Required if required else vol.Optional
+        if is_reconfigure and defaults is not None:
+            existing_val = defaults.get(key, "" if not required else vol.UNDEFINED)
+            if required or default is not vol.UNDEFINED:
+                return cls(key, default=existing_val)
+            return cls(key, description={"suggested_value": existing_val})
+        if default is not vol.UNDEFINED:
+            return cls(key, default=default)
+        return cls(key)
+
+    return vol.Schema(
+        {
+            _field(CONF_ROOM_NAME, required=True): selector.TextSelector(),
+            _field(CONF_AREA): selector.AreaSelector(),
+            _field(CONF_TRV_ENTITIES, required=True): trv_selector,
+            _field(CONF_TEMP_SENSOR): selector.EntitySelector(
+                selector.EntitySelectorConfig(
+                    domain="sensor",
+                    device_class=SensorDeviceClass.TEMPERATURE,
+                )
+            ),
+            _field(CONF_HEAT_SOURCE_TYPE): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=HEAT_SOURCE_TYPE_OPTIONS,
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                ),
+            ),
+            _field(CONF_HEAT_SOURCE): selector.EntitySelector(
+                selector.EntitySelectorConfig(
+                    domain=["climate", "binary_sensor"],
+                )
+            ),
+            _field(CONF_REMOTE_CLIMATE): selector.EntitySelector(
+                selector.EntitySelectorConfig(
+                    domain="climate",
+                )
+            ),
+            _field(CONF_SCHEDULE_ENTITY): selector.EntitySelector(
+                selector.EntitySelectorConfig(
+                    domain="schedule",
+                )
+            ),
+            _field(
+                CONF_AT_HOME_TEMP, default=DEFAULT_AT_HOME_TEMP
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=5.0,
+                    max=35.0,
+                    step=0.5,
+                    unit_of_measurement="°C",
+                    mode=selector.NumberSelectorMode.BOX,
+                )
+            ),
+            _field(CONF_AWAY_TEMP, default=DEFAULT_AWAY_TEMP): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=5.0,
+                    max=35.0,
+                    step=0.5,
+                    unit_of_measurement="°C",
+                    mode=selector.NumberSelectorMode.BOX,
+                )
+            ),
+            _field(CONF_PREHEAT_ENABLED, default=True): selector.BooleanSelector(),
+        }
+    )
+
+
 class RoomSubentryFlowHandler(ConfigSubentryFlow):
     """Handle subentry flow for adding and modifying a room."""
 
@@ -269,7 +380,6 @@ class RoomSubentryFlowHandler(ConfigSubentryFlow):
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            room_name = user_input[CONF_ROOM_NAME]
             trv_entities = user_input[CONF_TRV_ENTITIES]
 
             if not trv_entities:
@@ -277,98 +387,18 @@ class RoomSubentryFlowHandler(ConfigSubentryFlow):
             elif set(trv_entities) & _get_assigned_trv_ids(self._get_entry()):
                 errors[CONF_TRV_ENTITIES] = "trv_already_assigned"
             else:
+                data = _extract_room_data(user_input)
                 return self.async_create_entry(
-                    title=room_name,
-                    data={
-                        CONF_ROOM_NAME: room_name,
-                        CONF_AREA: user_input.get(CONF_AREA, ""),
-                        CONF_TRV_ENTITIES: trv_entities,
-                        CONF_TEMP_SENSOR: user_input.get(CONF_TEMP_SENSOR, ""),
-                        CONF_HEAT_SOURCE: user_input.get(CONF_HEAT_SOURCE, ""),
-                        CONF_HEAT_SOURCE_TYPE: user_input.get(
-                            CONF_HEAT_SOURCE_TYPE, ""
-                        ),
-                        CONF_REMOTE_CLIMATE: user_input.get(CONF_REMOTE_CLIMATE, ""),
-                        CONF_SCHEDULE_ENTITY: user_input.get(CONF_SCHEDULE_ENTITY, ""),
-                        CONF_AT_HOME_TEMP: user_input.get(
-                            CONF_AT_HOME_TEMP, DEFAULT_AT_HOME_TEMP
-                        ),
-                        CONF_AWAY_TEMP: user_input.get(
-                            CONF_AWAY_TEMP, DEFAULT_AWAY_TEMP
-                        ),
-                        CONF_PREHEAT_ENABLED: user_input.get(
-                            CONF_PREHEAT_ENABLED, True
-                        ),
-                    },
+                    title=data[CONF_ROOM_NAME],
+                    data=data,
                 )
 
         config_entry = self._get_entry()
         backend = config_entry.data.get(CONF_BACKEND, BACKEND_Z2M)
 
-        # Build TRV device selector based on backend
-        trv_selector = _build_trv_selector(backend)
-
         return self.async_show_form(
             step_id="user",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(CONF_ROOM_NAME): selector.TextSelector(),
-                    vol.Optional(CONF_AREA): selector.AreaSelector(),
-                    vol.Required(CONF_TRV_ENTITIES): trv_selector,
-                    vol.Optional(CONF_TEMP_SENSOR): selector.EntitySelector(
-                        selector.EntitySelectorConfig(
-                            domain="sensor",
-                            device_class=SensorDeviceClass.TEMPERATURE,
-                        )
-                    ),
-                    vol.Optional(CONF_HEAT_SOURCE_TYPE): selector.SelectSelector(
-                        selector.SelectSelectorConfig(
-                            options=HEAT_SOURCE_TYPE_OPTIONS,
-                            mode=selector.SelectSelectorMode.DROPDOWN,
-                        ),
-                    ),
-                    vol.Optional(CONF_HEAT_SOURCE): selector.EntitySelector(
-                        selector.EntitySelectorConfig(
-                            domain=["climate", "binary_sensor"],
-                        )
-                    ),
-                    vol.Optional(CONF_REMOTE_CLIMATE): selector.EntitySelector(
-                        selector.EntitySelectorConfig(
-                            domain="climate",
-                        )
-                    ),
-                    vol.Optional(CONF_SCHEDULE_ENTITY): selector.EntitySelector(
-                        selector.EntitySelectorConfig(
-                            domain="schedule",
-                        )
-                    ),
-                    vol.Optional(
-                        CONF_AT_HOME_TEMP, default=DEFAULT_AT_HOME_TEMP
-                    ): selector.NumberSelector(
-                        selector.NumberSelectorConfig(
-                            min=5.0,
-                            max=35.0,
-                            step=0.5,
-                            unit_of_measurement="°C",
-                            mode=selector.NumberSelectorMode.BOX,
-                        )
-                    ),
-                    vol.Optional(
-                        CONF_AWAY_TEMP, default=DEFAULT_AWAY_TEMP
-                    ): selector.NumberSelector(
-                        selector.NumberSelectorConfig(
-                            min=5.0,
-                            max=35.0,
-                            step=0.5,
-                            unit_of_measurement="°C",
-                            mode=selector.NumberSelectorMode.BOX,
-                        )
-                    ),
-                    vol.Optional(
-                        CONF_PREHEAT_ENABLED, default=True
-                    ): selector.BooleanSelector(),
-                }
-            ),
+            data_schema=_build_room_schema(backend),
             errors=errors,
         )
 
@@ -383,7 +413,6 @@ class RoomSubentryFlowHandler(ConfigSubentryFlow):
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            room_name = user_input[CONF_ROOM_NAME]
             trv_entities = user_input[CONF_TRV_ENTITIES]
 
             if not trv_entities:
@@ -393,134 +422,18 @@ class RoomSubentryFlowHandler(ConfigSubentryFlow):
             ):
                 errors[CONF_TRV_ENTITIES] = "trv_already_assigned"
             else:
+                data = _extract_room_data(user_input)
                 return self.async_update_and_abort(
                     config_entry,
                     subentry,
-                    title=room_name,
-                    data={
-                        CONF_ROOM_NAME: room_name,
-                        CONF_AREA: user_input.get(CONF_AREA, ""),
-                        CONF_TRV_ENTITIES: trv_entities,
-                        CONF_TEMP_SENSOR: user_input.get(CONF_TEMP_SENSOR, ""),
-                        CONF_HEAT_SOURCE: user_input.get(CONF_HEAT_SOURCE, ""),
-                        CONF_HEAT_SOURCE_TYPE: user_input.get(
-                            CONF_HEAT_SOURCE_TYPE, ""
-                        ),
-                        CONF_REMOTE_CLIMATE: user_input.get(CONF_REMOTE_CLIMATE, ""),
-                        CONF_SCHEDULE_ENTITY: user_input.get(CONF_SCHEDULE_ENTITY, ""),
-                        CONF_AT_HOME_TEMP: user_input.get(
-                            CONF_AT_HOME_TEMP, DEFAULT_AT_HOME_TEMP
-                        ),
-                        CONF_AWAY_TEMP: user_input.get(
-                            CONF_AWAY_TEMP, DEFAULT_AWAY_TEMP
-                        ),
-                        CONF_PREHEAT_ENABLED: user_input.get(
-                            CONF_PREHEAT_ENABLED, True
-                        ),
-                    },
+                    title=data[CONF_ROOM_NAME],
+                    data=data,
                 )
 
         backend = config_entry.data.get(CONF_BACKEND, BACKEND_Z2M)
 
-        trv_selector = _build_trv_selector(backend)
-
         return self.async_show_form(
             step_id="reconfigure",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(
-                        CONF_ROOM_NAME,
-                        default=existing.get(CONF_ROOM_NAME, ""),
-                    ): selector.TextSelector(),
-                    vol.Optional(
-                        CONF_AREA,
-                        description={"suggested_value": existing.get(CONF_AREA, "")},
-                    ): selector.AreaSelector(),
-                    vol.Required(
-                        CONF_TRV_ENTITIES,
-                        default=existing.get(CONF_TRV_ENTITIES, []),
-                    ): trv_selector,
-                    vol.Optional(
-                        CONF_TEMP_SENSOR,
-                        description={
-                            "suggested_value": existing.get(CONF_TEMP_SENSOR, "")
-                        },
-                    ): selector.EntitySelector(
-                        selector.EntitySelectorConfig(
-                            domain="sensor",
-                            device_class=SensorDeviceClass.TEMPERATURE,
-                        )
-                    ),
-                    vol.Optional(
-                        CONF_HEAT_SOURCE_TYPE,
-                        description={
-                            "suggested_value": existing.get(CONF_HEAT_SOURCE_TYPE, "")
-                        },
-                    ): selector.SelectSelector(
-                        selector.SelectSelectorConfig(
-                            options=HEAT_SOURCE_TYPE_OPTIONS,
-                            mode=selector.SelectSelectorMode.DROPDOWN,
-                        ),
-                    ),
-                    vol.Optional(
-                        CONF_HEAT_SOURCE,
-                        description={
-                            "suggested_value": existing.get(CONF_HEAT_SOURCE, "")
-                        },
-                    ): selector.EntitySelector(
-                        selector.EntitySelectorConfig(
-                            domain=["climate", "binary_sensor"],
-                        )
-                    ),
-                    vol.Optional(
-                        CONF_REMOTE_CLIMATE,
-                        description={
-                            "suggested_value": existing.get(CONF_REMOTE_CLIMATE, "")
-                        },
-                    ): selector.EntitySelector(
-                        selector.EntitySelectorConfig(
-                            domain="climate",
-                        )
-                    ),
-                    vol.Optional(
-                        CONF_SCHEDULE_ENTITY,
-                        description={
-                            "suggested_value": existing.get(CONF_SCHEDULE_ENTITY, "")
-                        },
-                    ): selector.EntitySelector(
-                        selector.EntitySelectorConfig(
-                            domain="schedule",
-                        )
-                    ),
-                    vol.Optional(
-                        CONF_AT_HOME_TEMP,
-                        default=existing.get(CONF_AT_HOME_TEMP, DEFAULT_AT_HOME_TEMP),
-                    ): selector.NumberSelector(
-                        selector.NumberSelectorConfig(
-                            min=5.0,
-                            max=35.0,
-                            step=0.5,
-                            unit_of_measurement="°C",
-                            mode=selector.NumberSelectorMode.BOX,
-                        )
-                    ),
-                    vol.Optional(
-                        CONF_AWAY_TEMP,
-                        default=existing.get(CONF_AWAY_TEMP, DEFAULT_AWAY_TEMP),
-                    ): selector.NumberSelector(
-                        selector.NumberSelectorConfig(
-                            min=5.0,
-                            max=35.0,
-                            step=0.5,
-                            unit_of_measurement="°C",
-                            mode=selector.NumberSelectorMode.BOX,
-                        )
-                    ),
-                    vol.Optional(
-                        CONF_PREHEAT_ENABLED,
-                        default=existing.get(CONF_PREHEAT_ENABLED, True),
-                    ): selector.BooleanSelector(),
-                }
-            ),
+            data_schema=_build_room_schema(backend, defaults=dict(existing)),
             errors=errors,
         )
