@@ -74,7 +74,6 @@ TIME_SYNC_INTERVAL: Final = 7 * 24 * 60 * 60  # Weekly
 
 # ── Schedule validation ────────────────────────────────────────────────
 SCHEDULE_MAX_DAILY_TRANSITIONS: Final = 6
-SCHEDULE_MAX_WEEKLY_TRANSITIONS: Final = 42  # 7 × 6
 SCHEDULE_MINUTES_PER_DAY: Final = 1440  # 24 × 60
 
 # ── Schedule ZCL constants ─────────────────────────────────────────────
@@ -98,36 +97,15 @@ SCHEDULE_DOW_ALL: Final = [
 
 SCHEDULE_MODE_HEAT: Final = 0x01
 
-# Diagnostics cluster for power-cycle detection
-CLUSTER_DIAGNOSTICS: Final = 0x0B05
-ATTR_SW_ERROR_CODE: Final = 0x4000
+# Diagnostics: power-cycle detection
 SW_ERROR_TIME_LOST: Final = (
     "invalid_clock_information"  # Error E10 (bit 9) — AU417130778872en-000102, §1.5
 )
-
-# Danfoss Ally system_status_code bitmap decoding (AU417130778872en-000102, §1.5).
-# Keys are bit positions in the BITMAP16. Used by the ZHA backend to decode the
-# raw numeric value to the same comma-separated string format that Z2M produces
-# after zigbee-herdsman-converters PR #12026 + PR3.
-DANFOSS_ALLY_SYSTEM_STATUS_CODES: Final[dict[int, str]] = {
-    0: "top_pcb_sensor_error",
-    1: "side_pcb_sensor_error",
-    2: "non_volatile_memory_error",
-    3: "unknown_hw_error",
-    5: "motor_error",
-    7: "invalid_internal_communication",
-    9: "invalid_clock_information",
-    11: "radio_communication_error",
-    12: "encoder_jammed",
-    13: "low_battery",
-    14: "critical_low_battery",
-}
 
 # Power cycle check interval (how often to poll for time-lost)
 POWER_CYCLE_CHECK_INTERVAL: Final = 15 * 60  # 15 minutes
 
 # ── Thermostat programming mode ────────────────────────────────────────
-ATTR_THERMOSTAT_PROGRAMMING_MODE: Final = 0x0025
 SCHEDULE_MODE_MANUAL: Final = 0  # Bit0=0, Bit1=0 -> manual, no preheat
 SCHEDULE_MODE_SCHEDULE: Final = 1  # Bit0=1, Bit1=0 -> schedule, no preheat
 SCHEDULE_MODE_SCHEDULE_PREHEAT: Final = 3  # Bit0=1, Bit1=1 -> schedule + preheat
