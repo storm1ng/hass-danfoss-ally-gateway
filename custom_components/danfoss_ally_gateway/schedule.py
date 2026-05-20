@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Final
 
 from .const import (
     SCHEDULE_DOW_ALL,
@@ -21,6 +21,16 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+DAY_NAMES: Final = [
+    "Sunday",
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+]
 
 
 @dataclass(frozen=True, order=True)
@@ -136,20 +146,11 @@ class WeeklySchedule:
     def validate(self) -> list[str]:
         """Validate the entire weekly schedule."""
         errors: list[str] = []
-        day_names = [
-            "Sunday",
-            "Monday",
-            "Tuesday",
-            "Wednesday",
-            "Thursday",
-            "Friday",
-            "Saturday",
-        ]
         total_events = 0
         for i, day in enumerate(self.days):
             day_errors = day.validate()
             for err in day_errors:
-                errors.append(f"{day_names[i]}: {err}")
+                errors.append(f"{DAY_NAMES[i]}: {err}")
             total_events += len(day.events)
 
         if total_events > 42:
@@ -471,17 +472,8 @@ def from_ha_schedule(
             continue
 
         if len(blocks) > MAX_BLOCKS_PER_DAY:
-            day_names = [
-                "Sunday",
-                "Monday",
-                "Tuesday",
-                "Wednesday",
-                "Thursday",
-                "Friday",
-                "Saturday",
-            ]
             raise ValueError(
-                f"{day_names[day_idx]}: {len(blocks)} at-home blocks "
+                f"{DAY_NAMES[day_idx]}: {len(blocks)} at-home blocks "
                 f"exceeds maximum of {MAX_BLOCKS_PER_DAY}"
             )
 
@@ -489,17 +481,8 @@ def from_ha_schedule(
         for from_min, to_min in blocks:
             duration = to_min - from_min
             if duration < MIN_BLOCK_DURATION:
-                day_names = [
-                    "Sunday",
-                    "Monday",
-                    "Tuesday",
-                    "Wednesday",
-                    "Thursday",
-                    "Friday",
-                    "Saturday",
-                ]
                 raise ValueError(
-                    f"{day_names[day_idx]}: block {from_min}-{to_min} "
+                    f"{DAY_NAMES[day_idx]}: block {from_min}-{to_min} "
                     f"is {duration} minutes (minimum {MIN_BLOCK_DURATION})"
                 )
             events.append(
