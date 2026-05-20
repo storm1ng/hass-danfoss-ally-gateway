@@ -15,14 +15,14 @@ from homeassistant.components.binary_sensor import (
     BinarySensorEntity,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import (
     AddConfigEntryEntitiesCallback,
 )
 
 from .const import DOMAIN
-from .coordinator import RoomCoordinator, RoomState
+from .coordinator import RoomCoordinator
+from .entity import DanfossAllyEntityBase
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -48,7 +48,7 @@ def create_room_entities(
     coordinator: RoomCoordinator,
     config_entry_id: str,
     subentry_id: str,
-) -> list[_DanfossAllyBinarySensorBase]:
+) -> list[BinarySensorEntity]:
     """Create binary sensor entities for a single room coordinator."""
     return [
         DanfossAllyHeatRequired(coordinator, config_entry_id, subentry_id),
@@ -57,55 +57,7 @@ def create_room_entities(
     ]
 
 
-class _DanfossAllyBinarySensorBase(BinarySensorEntity):
-    """Base class for Danfoss Ally binary sensors."""
-
-    _attr_has_entity_name = True
-
-    def __init__(
-        self,
-        coordinator: RoomCoordinator,
-        config_entry_id: str,
-        subentry_id: str,
-        key: str,
-    ) -> None:
-        """Initialize the binary sensor."""
-        self._coordinator = coordinator
-        self._config_entry_id = config_entry_id
-        self._subentry_id = subentry_id
-        self._attr_unique_id = f"{DOMAIN}_{config_entry_id}_{subentry_id}_{key}"
-
-        # Device grouping: one virtual device per room
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, f"{config_entry_id}_{subentry_id}")},
-            name=f"Danfoss Ally {coordinator.room_name}",
-            manufacturer="Danfoss",
-            model="Ally Virtual Room",
-        )
-
-    async def async_added_to_hass(self) -> None:
-        """Register for coordinator updates."""
-        self._unsub = self._coordinator.register_state_callback(
-            self._handle_coordinator_update
-        )
-
-    async def async_will_remove_from_hass(self) -> None:
-        """Unregister from coordinator."""
-        if hasattr(self, "_unsub"):
-            self._unsub()
-
-    @callback
-    def _handle_coordinator_update(self, state: RoomState) -> None:
-        """Handle updated room state."""
-        self.async_write_ha_state()
-
-    @property
-    def available(self) -> bool:
-        """Return True if the room has at least one responsive TRV."""
-        return self._coordinator.state.available
-
-
-class DanfossAllyHeatRequired(_DanfossAllyBinarySensorBase):
+class DanfossAllyHeatRequired(DanfossAllyEntityBase, BinarySensorEntity):
     """Binary sensor: heat is required by any TRV in the room."""
 
     _attr_translation_key = "heat_required"
@@ -117,7 +69,8 @@ class DanfossAllyHeatRequired(_DanfossAllyBinarySensorBase):
         subentry_id: str,
     ) -> None:
         """Initialize heat required sensor."""
-        super().__init__(coordinator, config_entry_id, subentry_id, "heat_required")
+        super().__init__(coordinator, config_entry_id, subentry_id)
+        self._attr_unique_id = f"{DOMAIN}_{config_entry_id}_{subentry_id}_heat_required"
         self._attr_translation_placeholders = {"room_name": coordinator.room_name}
 
     @property
@@ -126,7 +79,7 @@ class DanfossAllyHeatRequired(_DanfossAllyBinarySensorBase):
         return self._coordinator.state.heat_required
 
 
-class DanfossAllyHeatAvailable(_DanfossAllyBinarySensorBase):
+class DanfossAllyHeatAvailable(DanfossAllyEntityBase, BinarySensorEntity):
     """Binary sensor: heat is available from the heating system."""
 
     _attr_translation_key = "heat_available"
@@ -138,7 +91,10 @@ class DanfossAllyHeatAvailable(_DanfossAllyBinarySensorBase):
         subentry_id: str,
     ) -> None:
         """Initialize heat available sensor."""
-        super().__init__(coordinator, config_entry_id, subentry_id, "heat_available")
+        super().__init__(coordinator, config_entry_id, subentry_id)
+        self._attr_unique_id = (
+            f"{DOMAIN}_{config_entry_id}_{subentry_id}_heat_available"
+        )
         self._attr_translation_placeholders = {"room_name": coordinator.room_name}
 
     @property
@@ -147,7 +103,7 @@ class DanfossAllyHeatAvailable(_DanfossAllyBinarySensorBase):
         return self._coordinator.state.heat_available
 
 
-class DanfossAllyWindowOpen(_DanfossAllyBinarySensorBase):
+class DanfossAllyWindowOpen(DanfossAllyEntityBase, BinarySensorEntity):
     """Binary sensor: window open detected in the room."""
 
     _attr_device_class = BinarySensorDeviceClass.WINDOW
@@ -160,7 +116,8 @@ class DanfossAllyWindowOpen(_DanfossAllyBinarySensorBase):
         subentry_id: str,
     ) -> None:
         """Initialize window open sensor."""
-        super().__init__(coordinator, config_entry_id, subentry_id, "window_open")
+        super().__init__(coordinator, config_entry_id, subentry_id)
+        self._attr_unique_id = f"{DOMAIN}_{config_entry_id}_{subentry_id}_window_open"
         self._attr_translation_placeholders = {"room_name": coordinator.room_name}
 
     @property

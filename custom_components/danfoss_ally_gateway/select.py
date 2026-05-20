@@ -14,11 +14,11 @@ import logging
 from homeassistant.components.select import SelectEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .const import DOMAIN, PROGRAMMING_MODE_OPTIONS
 from .coordinator import RoomCoordinator, RoomState
+from .entity import DanfossAllyEntityBase
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -55,10 +55,9 @@ def create_room_entities(
     ]
 
 
-class DanfossAllyProgrammingModeSelect(SelectEntity):
+class DanfossAllyProgrammingModeSelect(DanfossAllyEntityBase, SelectEntity):
     """Select entity for Danfoss Ally programming mode."""
 
-    _attr_has_entity_name = True
     _attr_options = PROGRAMMING_MODE_OPTIONS
     _attr_translation_key = "programming_mode"
 
@@ -69,48 +68,20 @@ class DanfossAllyProgrammingModeSelect(SelectEntity):
         subentry_id: str,
     ) -> None:
         """Initialize the programming mode select entity."""
-        self._coordinator = coordinator
-        self._config_entry_id = config_entry_id
-        self._subentry_id = subentry_id
-
+        super().__init__(coordinator, config_entry_id, subentry_id)
         self._attr_unique_id = (
             f"{DOMAIN}_{config_entry_id}_{subentry_id}_programming_mode"
         )
-
-        # Device grouping: same virtual device as the climate entity
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, f"{config_entry_id}_{subentry_id}")},
-            name=f"Danfoss Ally {coordinator.room_name}",
-            manufacturer="Danfoss",
-            model="Ally Virtual Room",
-            entry_type=None,
-        )
+        self._attr_translation_placeholders = {"room_name": coordinator.room_name}
 
         # Initial state
         self._attr_current_option = coordinator.schedule_mode_option
-        self._attr_translation_placeholders = {"room_name": coordinator.room_name}
-
-    async def async_added_to_hass(self) -> None:
-        """Register for coordinator updates when added to HA."""
-        self._unsub = self._coordinator.register_state_callback(
-            self._handle_coordinator_update
-        )
-
-    async def async_will_remove_from_hass(self) -> None:
-        """Unregister from coordinator when removed."""
-        if hasattr(self, "_unsub"):
-            self._unsub()
 
     @callback
     def _handle_coordinator_update(self, state: RoomState) -> None:
         """Handle updated room state from coordinator."""
         self._attr_current_option = self._coordinator.schedule_mode_option
         self.async_write_ha_state()
-
-    @property
-    def available(self) -> bool:
-        """Return True if the room has at least one responsive TRV."""
-        return self._coordinator.state.available
 
     async def async_select_option(self, option: str) -> None:
         """Handle the user selecting a new programming mode."""

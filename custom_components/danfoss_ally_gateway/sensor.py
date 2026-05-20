@@ -15,14 +15,14 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import PERCENTAGE, EntityCategory
-from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import (
     AddConfigEntryEntitiesCallback,
 )
 
 from .const import DOMAIN
-from .coordinator import RoomCoordinator, RoomState
+from .coordinator import RoomCoordinator
+from .entity import DanfossAllyEntityBase
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -40,9 +40,7 @@ async def async_setup_entry(
     data.setdefault("platform_add_entities", {})["sensor"] = async_add_entities
 
     for subentry_id, coordinator in coordinators.items():
-        entities = list(
-            create_room_entities(coordinator, config_entry.entry_id, subentry_id)
-        )
+        entities = create_room_entities(coordinator, config_entry.entry_id, subentry_id)
         async_add_entities(entities, config_subentry_id=subentry_id)
 
 
@@ -76,56 +74,10 @@ def create_room_entities(
     return entities
 
 
-class _DanfossAllySensorBase(SensorEntity):
-    """Base class for Danfoss Ally sensors."""
-
-    _attr_has_entity_name = True
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
-
-    def __init__(
-        self,
-        coordinator: RoomCoordinator,
-        config_entry_id: str,
-        subentry_id: str,
-    ) -> None:
-        """Initialize the sensor."""
-        self._coordinator = coordinator
-        self._config_entry_id = config_entry_id
-        self._subentry_id = subentry_id
-
-        # Device grouping: one virtual device per room
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, f"{config_entry_id}_{subentry_id}")},
-            name=f"Danfoss Ally {coordinator.room_name}",
-            manufacturer="Danfoss",
-            model="Ally Virtual Room",
-        )
-
-    async def async_added_to_hass(self) -> None:
-        """Register for coordinator updates."""
-        self._unsub = self._coordinator.register_state_callback(
-            self._handle_coordinator_update
-        )
-
-    async def async_will_remove_from_hass(self) -> None:
-        """Unregister from coordinator."""
-        if hasattr(self, "_unsub"):
-            self._unsub()
-
-    @callback
-    def _handle_coordinator_update(self, state: RoomState) -> None:
-        """Handle updated room state."""
-        self.async_write_ha_state()
-
-    @property
-    def available(self) -> bool:
-        """Return True if the room has at least one responsive TRV."""
-        return self._coordinator.state.available
-
-
-class DanfossAllyHeatingDemand(_DanfossAllySensorBase):
+class DanfossAllyHeatingDemand(DanfossAllyEntityBase, SensorEntity):
     """Sensor: TRV PI heating demand in percent."""
 
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_native_unit_of_measurement = PERCENTAGE
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_icon = "mdi:radiator"
@@ -155,9 +107,10 @@ class DanfossAllyHeatingDemand(_DanfossAllySensorBase):
         return trv_state.pi_heating_demand
 
 
-class DanfossAllyLoadEstimate(_DanfossAllySensorBase):
+class DanfossAllyLoadEstimate(DanfossAllyEntityBase, SensorEntity):
     """Sensor: TRV load estimate value."""
 
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_icon = "mdi:scale-balance"
     _attr_translation_key = "load_estimate"
@@ -186,9 +139,10 @@ class DanfossAllyLoadEstimate(_DanfossAllySensorBase):
         return trv_state.load_estimate
 
 
-class DanfossAllyLoadRoomMean(_DanfossAllySensorBase):
+class DanfossAllyLoadRoomMean(DanfossAllyEntityBase, SensorEntity):
     """Sensor: calculated load room mean for the room."""
 
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_icon = "mdi:scale-balance"
     _attr_translation_key = "load_room_mean"

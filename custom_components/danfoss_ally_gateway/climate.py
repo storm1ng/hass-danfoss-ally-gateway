@@ -21,13 +21,13 @@ from homeassistant.components.climate.const import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import ATTR_TEMPERATURE, UnitOfTemperature
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import (
     AddConfigEntryEntitiesCallback,
 )
 
 from .const import DOMAIN
 from .coordinator import RoomCoordinator, RoomState
+from .entity import DanfossAllyEntityBase
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -69,10 +69,9 @@ def create_room_entities(
     ]
 
 
-class DanfossAllyRoomClimate(ClimateEntity):
+class DanfossAllyRoomClimate(DanfossAllyEntityBase, ClimateEntity):
     """Virtual climate entity for a Danfoss Ally room."""
 
-    _attr_has_entity_name = True
     _attr_translation_key = "room"
     _attr_temperature_unit = UnitOfTemperature.CELSIUS
     _attr_hvac_modes = [HVACMode.HEAT]
@@ -88,37 +87,14 @@ class DanfossAllyRoomClimate(ClimateEntity):
         subentry_id: str,
     ) -> None:
         """Initialize the room climate entity."""
-        self._coordinator = coordinator
-        self._config_entry_id = config_entry_id
-        self._subentry_id = subentry_id
-        # Entity IDs
+        super().__init__(coordinator, config_entry_id, subentry_id)
         self._attr_unique_id = f"{DOMAIN}_{config_entry_id}_{subentry_id}_climate"
         self._attr_translation_placeholders = {"room_name": coordinator.room_name}
-
-        # Device grouping: one virtual device per room
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, f"{config_entry_id}_{subentry_id}")},
-            name=f"Danfoss Ally {coordinator.room_name}",
-            manufacturer="Danfoss",
-            model="Ally Virtual Room",
-            entry_type=None,
-        )
 
         # Initial state
         self._attr_hvac_mode = HVACMode.HEAT
         self._attr_current_temperature = coordinator.state.current_temperature
         self._attr_target_temperature = coordinator.state.target_temperature
-
-    async def async_added_to_hass(self) -> None:
-        """Register for coordinator updates when added to HA."""
-        self._unsub = self._coordinator.register_state_callback(
-            self._handle_coordinator_update
-        )
-
-    async def async_will_remove_from_hass(self) -> None:
-        """Unregister from coordinator when removed."""
-        if hasattr(self, "_unsub"):
-            self._unsub()
 
     @callback
     def _handle_coordinator_update(self, state: RoomState) -> None:
@@ -126,11 +102,6 @@ class DanfossAllyRoomClimate(ClimateEntity):
         self._attr_current_temperature = state.current_temperature
         self._attr_target_temperature = state.target_temperature
         self.async_write_ha_state()
-
-    @property
-    def available(self) -> bool:
-        """Return True if the room has at least one responsive TRV."""
-        return self._coordinator.state.available
 
     @property
     def hvac_action(self) -> HVACAction:
