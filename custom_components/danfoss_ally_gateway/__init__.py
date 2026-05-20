@@ -11,12 +11,14 @@ from typing import Any
 
 from homeassistant.config_entries import ConfigEntry, ConfigSubentry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import device_registry as dr
 
 from .backend import DanfossBackend
 from .backend.z2m import Z2MBackend
 from .const import (
     BACKEND_Z2M,
+    BACKEND_ZHA,
     CONF_AREA,
     CONF_BACKEND,
     CONF_MQTT_BASE_TOPIC,
@@ -55,6 +57,15 @@ def _create_backend(hass: HomeAssistant, entry: ConfigEntry) -> DanfossBackend:
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Danfoss Ally Gateway from a config entry."""
     _LOGGER.info("Setting up Danfoss Ally Gateway: %s", entry.title)
+
+    # Validate required backend integration is available
+    backend_type = entry.data[CONF_BACKEND]
+    if backend_type == BACKEND_Z2M and not hass.config_entries.async_entries("mqtt"):
+        raise ConfigEntryNotReady(
+            "MQTT integration is not set up. Zigbee2MQTT requires MQTT."
+        )
+    if backend_type == BACKEND_ZHA and not hass.config_entries.async_entries("zha"):
+        raise ConfigEntryNotReady("ZHA integration is not set up.")
 
     hass.data.setdefault(DOMAIN, {})
 

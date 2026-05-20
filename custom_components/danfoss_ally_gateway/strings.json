@@ -29,7 +29,9 @@
         },
         "error": {
             "invalid_backend": "Invalid backend selected.",
-            "cannot_connect": "Failed to connect to the selected backend."
+            "cannot_connect": "Failed to connect to the selected backend.",
+            "mqtt_not_configured": "The MQTT integration is not set up. Zigbee2MQTT requires MQTT.",
+            "zha_not_configured": "The ZHA integration is not set up."
         },
         "abort": {
             "already_configured": "[%key:common::config_flow::abort::already_configured_service%]",

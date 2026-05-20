@@ -158,17 +158,21 @@ class DanfossAllyGatewayConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             base_topic = user_input.get(CONF_MQTT_BASE_TOPIC, "zigbee2mqtt")
 
-            # Set unique ID based on backend + topic to prevent duplicates
-            await self.async_set_unique_id(f"{BACKEND_Z2M}_{base_topic}")
-            self._abort_if_unique_id_configured()
+            # Validate MQTT integration is set up (required by Z2M)
+            if not self.hass.config_entries.async_entries("mqtt"):
+                errors["base"] = "mqtt_not_configured"
+            else:
+                # Set unique ID based on backend + topic to prevent duplicates
+                await self.async_set_unique_id(f"{BACKEND_Z2M}_{base_topic}")
+                self._abort_if_unique_id_configured()
 
-            return self.async_create_entry(
-                title=f"Danfoss Ally Gateway (Z2M: {base_topic})",
-                data={
-                    CONF_BACKEND: BACKEND_Z2M,
-                    CONF_MQTT_BASE_TOPIC: base_topic,
-                },
-            )
+                return self.async_create_entry(
+                    title=f"Danfoss Ally Gateway (Z2M: {base_topic})",
+                    data={
+                        CONF_BACKEND: BACKEND_Z2M,
+                        CONF_MQTT_BASE_TOPIC: base_topic,
+                    },
+                )
 
         return self.async_show_form(
             step_id="z2m",
@@ -186,21 +190,28 @@ class DanfossAllyGatewayConfigFlow(ConfigFlow, domain=DOMAIN):
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Configure ZHA connection."""
-        if user_input is not None:
-            await self.async_set_unique_id(BACKEND_ZHA)
-            self._abort_if_unique_id_configured()
+        errors: dict[str, str] = {}
 
-            return self.async_create_entry(
-                title="Danfoss Ally Gateway (ZHA)",
-                data={
-                    CONF_BACKEND: BACKEND_ZHA,
-                },
-            )
+        if user_input is not None:
+            # Validate ZHA integration is set up
+            if not self.hass.config_entries.async_entries("zha"):
+                errors["base"] = "zha_not_configured"
+            else:
+                await self.async_set_unique_id(BACKEND_ZHA)
+                self._abort_if_unique_id_configured()
+
+                return self.async_create_entry(
+                    title="Danfoss Ally Gateway (ZHA)",
+                    data={
+                        CONF_BACKEND: BACKEND_ZHA,
+                    },
+                )
 
         # ZHA doesn't need extra config - just confirm
         return self.async_show_form(
             step_id="zha",
             data_schema=vol.Schema({}),
+            errors=errors,
         )
 
     @classmethod

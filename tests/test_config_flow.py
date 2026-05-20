@@ -8,6 +8,7 @@ from homeassistant import config_entries
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import selector
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.danfoss_ally_gateway.config_flow import (
     _build_trv_selector,
@@ -25,6 +26,21 @@ from custom_components.danfoss_ally_gateway.const import (
     SUPPORTED_TRV_DEVICES_ZHA,
 )
 
+
+def _setup_mock_mqtt(hass: HomeAssistant) -> MockConfigEntry:
+    """Add a mock MQTT config entry to hass."""
+    entry = MockConfigEntry(domain="mqtt", title="MQTT")
+    entry.add_to_hass(hass)
+    return entry
+
+
+def _setup_mock_zha(hass: HomeAssistant) -> MockConfigEntry:
+    """Add a mock ZHA config entry to hass."""
+    entry = MockConfigEntry(domain="zha", title="ZHA")
+    entry.add_to_hass(hass)
+    return entry
+
+
 # ── Main Config Flow ──────────────────────────────────────────────────
 
 
@@ -39,6 +55,7 @@ class TestMainConfigFlow:
         assert result["step_id"] == "user"  # type: ignore[typeddict-item]
 
     async def test_z2m_backend_flow(self, hass: HomeAssistant):
+        _setup_mock_mqtt(hass)
         # Step 1: Select Z2M backend
         result = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": config_entries.SOURCE_USER}
@@ -61,6 +78,7 @@ class TestMainConfigFlow:
         assert result["data"][CONF_MQTT_BASE_TOPIC] == "zigbee2mqtt"  # type: ignore[typeddict-item]
 
     async def test_zha_backend_flow(self, hass: HomeAssistant):
+        _setup_mock_zha(hass)
         result = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": config_entries.SOURCE_USER}
         )
@@ -80,6 +98,7 @@ class TestMainConfigFlow:
         assert result["data"][CONF_BACKEND] == BACKEND_ZHA  # type: ignore[typeddict-item]
 
     async def test_z2m_custom_topic(self, hass: HomeAssistant):
+        _setup_mock_mqtt(hass)
         result = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": config_entries.SOURCE_USER}
         )
@@ -96,6 +115,7 @@ class TestMainConfigFlow:
 
     async def test_z2m_duplicate_blocked(self, hass: HomeAssistant):
         """Two entries with the same Z2M topic should be blocked."""
+        _setup_mock_mqtt(hass)
         # Create first entry
         result = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": config_entries.SOURCE_USER}
@@ -126,6 +146,7 @@ class TestMainConfigFlow:
         assert result2["reason"] == "already_configured"  # type: ignore[typeddict-item]
 
     async def test_zha_duplicate_blocked(self, hass: HomeAssistant):
+        _setup_mock_zha(hass)
         # Create first
         result = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": config_entries.SOURCE_USER}
@@ -153,6 +174,44 @@ class TestMainConfigFlow:
             {},
         )
         assert result2["type"] == FlowResultType.ABORT  # type: ignore[typeddict-item]
+
+    async def test_z2m_rejects_without_mqtt(self, hass: HomeAssistant):
+        """Z2M setup should fail if MQTT integration is not configured."""
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": config_entries.SOURCE_USER}
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {CONF_BACKEND: BACKEND_Z2M},
+        )
+        assert result["step_id"] == "z2m"  # type: ignore[typeddict-item]
+
+        # Submit without MQTT configured
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {CONF_MQTT_BASE_TOPIC: "zigbee2mqtt"},
+        )
+        assert result["type"] == FlowResultType.FORM  # type: ignore[typeddict-item]
+        assert result["errors"]["base"] == "mqtt_not_configured"  # type: ignore[typeddict-item]
+
+    async def test_zha_rejects_without_zha(self, hass: HomeAssistant):
+        """ZHA setup should fail if ZHA integration is not configured."""
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": config_entries.SOURCE_USER}
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {CONF_BACKEND: BACKEND_ZHA},
+        )
+        assert result["step_id"] == "zha"  # type: ignore[typeddict-item]
+
+        # Submit without ZHA configured
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {},
+        )
+        assert result["type"] == FlowResultType.FORM  # type: ignore[typeddict-item]
+        assert result["errors"]["base"] == "zha_not_configured"  # type: ignore[typeddict-item]
 
 
 # ── TRV Selector Tests ────────────────────────────────────────────────
