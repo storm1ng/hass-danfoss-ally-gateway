@@ -1,14 +1,14 @@
 {
   "domain": "danfoss_ally_gateway",
   "name": "Danfoss Ally Gateway",
-  "codeowners": [],
+  "codeowners": ["@storm1ng"],
   "config_flow": true,
   "dependencies": [],
   "after_dependencies": ["mqtt", "zha"],
-  "documentation": "https://github.com/storm1ng/hass-danfoss-ally-integration",
+  "documentation": "https://github.com/storm1ng/hass-danfoss-ally-gateway",
   "integration_type": "hub",
   "iot_class": "local_push",
-  "issue_tracker": "https://github.com/storm1ng/hass-danfoss-ally-integration/issues",
+  "issue_tracker": "https://github.com/storm1ng/hass-danfoss-ally-gateway/issues",
   "requirements": [],
   "version": "0.1.0"
 }
