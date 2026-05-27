@@ -54,6 +54,7 @@ from ..const import (
     HEAT_SOURCE_CLIMATE,
     LOAD_BALANCE_DISABLED_VALUE,
     LOAD_BALANCE_INVALID_THRESHOLD,
+    SW_ERROR_TIME_LOST,
     TRV_AVAILABILITY_TIMEOUT,
     WINDOW_OPEN_DETECTED,
     Z2M_ATTR_LOAD_ROOM_MEAN,
@@ -354,6 +355,23 @@ class RoomCoordinator:
         if trv_state.radiator_covered is not None:
             self._ext_temp.update_covered(trv_id, trv_state.radiator_covered)
 
+        # Reactive power-cycle detection: check for E10 (time lost) in
+        # pushed state data.  This avoids polling the TRV and catches
+        # power cycles within one check-in interval (~5 min).
+        system_status = trv_state.raw.get("system_status_code")
+        if system_status and SW_ERROR_TIME_LOST in str(system_status):
+            if trv_id not in self._recovering_trvs:
+                _LOGGER.warning(
+                    "TRV %s in room '%s' reports time lost (E10) via push data. "
+                    "Triggering power-cycle recovery.",
+                    trv_id,
+                    self._room_name,
+                )
+                self._recovering_trvs.add(trv_id)
+                self.hass.async_create_task(
+                    self._async_handle_device_rejoin_and_clear(trv_id)
+                )
+
         # Seed load_room_mean from TRV-reported value
         if self.state.load_room_mean is None and len(self._trv_ids) > 1:
             raw_mean = trv_state.raw.get(Z2M_ATTR_LOAD_ROOM_MEAN)
@@ -555,6 +573,18 @@ class RoomCoordinator:
 
         async_call_later(self.hass, 5, _rejoin_cb)
 
+    async def _async_handle_device_rejoin_and_clear(self, trv_id: str) -> None:
+        """Run device rejoin recovery and clear the dedup guard.
+
+        Used by the reactive E10 detection path so that the
+        ``_recovering_trvs`` guard is released after recovery completes
+        (or fails), allowing future E10 reports to trigger recovery again.
+        """
+        try:
+            await self._async_handle_device_rejoin(trv_id)
+        finally:
+            self._recovering_trvs.discard(trv_id)
+
     async def _async_handle_device_rejoin(self, trv_id: str) -> None:
         """Handle TRV rejoin: restore settings lost after power cycle."""
         # Schedule recovery
@@ -647,6 +677,11 @@ class RoomCoordinator:
     def _power_cycle_timer(self) -> Any:
         """Proxy: power-cycle detection periodic timer."""
         return self._schedule._power_cycle_timer
+
+    @property
+    def _recovering_trvs(self) -> set[str]:
+        """Proxy: set of TRVs currently recovering from power cycles."""
+        return self._schedule._recovering_trvs
 
     @property
     def _time_sync_timer(self) -> Any:

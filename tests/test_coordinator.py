@@ -686,6 +686,104 @@ class TestPowerCycleDetection:
         )
         await coord.async_teardown()
 
+    async def test_reactive_e10_triggers_recovery(
+        self, hass, mock_backend, subentry_data
+    ):
+        """E10 in pushed state data triggers power-cycle recovery."""
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        await coord.async_setup()
+
+        # Program a schedule so recovery has something to restore
+        ws = WeeklySchedule()
+        ws.days[1] = DaySchedule(events=[ScheduleEvent(360, 21.0)])
+        await coord.async_program_schedule(ws)
+
+        mock_backend.async_clear_weekly_schedule.reset_mock()
+        mock_backend.async_set_weekly_schedule.reset_mock()
+
+        # Simulate empty schedule on TRV after power cycle
+        mock_backend.async_get_weekly_schedule.return_value = None
+
+        # Push a state update with E10 flag
+        trv_id = coord._trv_ids[0]
+        state = make_trv_state(
+            entity_id=trv_id,
+            raw={"system_status_code": "invalid_clock_information"},
+        )
+        coord._handle_trv_state_update(trv_id, state)
+
+        # Let the async task run
+        await hass.async_block_till_done()
+
+        # Should trigger recovery (schedule reprogram)
+        mock_backend.async_clear_weekly_schedule.assert_called()
+        assert mock_backend.async_set_weekly_schedule.call_count >= 1
+
+        # Dedup guard should be cleared after recovery
+        assert trv_id not in coord._recovering_trvs
+        await coord.async_teardown()
+
+    async def test_reactive_e10_dedup_prevents_double_recovery(
+        self, hass, mock_backend, subentry_data
+    ):
+        """Second E10 push while recovery is running does not trigger again."""
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        await coord.async_setup()
+
+        # Program a schedule
+        ws = WeeklySchedule()
+        ws.days[1] = DaySchedule(events=[ScheduleEvent(360, 21.0)])
+        await coord.async_program_schedule(ws)
+
+        mock_backend.async_clear_weekly_schedule.reset_mock()
+        mock_backend.async_get_weekly_schedule.return_value = None
+
+        trv_id = coord._trv_ids[0]
+
+        # Manually set the dedup guard (simulate recovery in progress)
+        coord._recovering_trvs.add(trv_id)
+
+        # Push a state update with E10 flag
+        state = make_trv_state(
+            entity_id=trv_id,
+            raw={"system_status_code": "invalid_clock_information"},
+        )
+        coord._handle_trv_state_update(trv_id, state)
+        await hass.async_block_till_done()
+
+        # Should NOT trigger recovery because dedup guard is active
+        mock_backend.async_clear_weekly_schedule.assert_not_called()
+
+        # Clean up
+        coord._recovering_trvs.discard(trv_id)
+        await coord.async_teardown()
+
+    async def test_reactive_e10_no_trigger_without_error(
+        self, hass, mock_backend, subentry_data
+    ):
+        """Normal state push (no E10) does not trigger recovery."""
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        await coord.async_setup()
+
+        ws = WeeklySchedule()
+        ws.days[1] = DaySchedule(events=[ScheduleEvent(360, 21.0)])
+        await coord.async_program_schedule(ws)
+
+        mock_backend.async_clear_weekly_schedule.reset_mock()
+
+        trv_id = coord._trv_ids[0]
+        state = make_trv_state(
+            entity_id=trv_id,
+            raw={"system_status_code": "ok"},
+        )
+        coord._handle_trv_state_update(trv_id, state)
+        await hass.async_block_till_done()
+
+        # Should NOT trigger recovery
+        mock_backend.async_clear_weekly_schedule.assert_not_called()
+        assert trv_id not in coord._recovering_trvs
+        await coord.async_teardown()
+
 
 # ── Device ID Resolution ──────────────────────────────────────────────
 

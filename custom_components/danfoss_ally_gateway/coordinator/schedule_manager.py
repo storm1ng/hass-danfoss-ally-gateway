@@ -66,6 +66,9 @@ class ScheduleDelegate:
         self._mode: int = SCHEDULE_MODE_MANUAL
         self._power_cycle_timer: CALLBACK_TYPE | None = None
 
+        # Power-cycle recovery dedup guard: TRVs currently being recovered
+        self._recovering_trvs: set[str] = set()
+
     @property
     def current_schedule(self) -> WeeklySchedule | None:
         """Return the currently programmed schedule."""
@@ -358,11 +361,27 @@ class ScheduleDelegate:
         )
 
     async def _async_check_power_cycle(self) -> None:
-        """Fallback: check all TRVs for schedule loss."""
+        """Safety-net fallback for power-cycle detection (runs every 6 hours).
+
+        Primary detection is reactive: the ``_handle_trv_state_update``
+        callback inspects ``system_status_code`` in every pushed state
+        update for E10 (time lost).  The ``_handle_device_announce``
+        callback handles explicit Zigbee rejoins.
+
+        This method is a rare fallback for edge cases where both the
+        device_announce event and the pushed E10 flag were missed (e.g.
+        HA restart overlapping with a TRV power cycle, or Z2M not
+        including system_status_code in its retained state).
+
+        It reads ``sw_error_code`` and ``GetWeeklySchedule`` from the
+        TRV via Zigbee, which wakes the device.  The 6-hour interval
+        keeps radio traffic to ~8 messages/day/TRV.
+        """
         if self._current_schedule is None:
-            return
+            return  # Nothing to verify
 
         for trv_id in self._trv_ids:
+            # Check E10 via Zigbee read (fallback — normally caught by push data)
             try:
                 error_code = await self._backend.async_read_sw_error_code(trv_id)
             except Exception:  # noqa: BLE001

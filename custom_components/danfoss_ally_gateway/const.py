@@ -103,7 +103,7 @@ SW_ERROR_TIME_LOST: Final = (
 )
 
 # Power cycle check interval (how often to poll for time-lost)
-POWER_CYCLE_CHECK_INTERVAL: Final = 15 * 60  # 15 minutes
+POWER_CYCLE_CHECK_INTERVAL: Final = 6 * 60 * 60  # 6 hours (safety-net fallback)
 
 # ── Thermostat programming mode ────────────────────────────────────────
 SCHEDULE_MODE_MANUAL: Final = 0  # Bit0=0, Bit1=0 -> manual, no preheat
