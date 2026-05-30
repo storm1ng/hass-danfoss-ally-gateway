@@ -1,0 +1,18 @@
+{
+    "entity": {
+        "climate": {
+            "room": {
+                "state_attributes": {
+                    "preset_mode": {
+                        "default": "mdi:thermostat",
+                        "state": {
+                            "none": "mdi:thermometer",
+                            "schedule": "mdi:calendar-clock",
+                            "schedule_with_preheat": "mdi:radiator"
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
