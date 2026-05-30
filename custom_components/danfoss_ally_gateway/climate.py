@@ -93,7 +93,7 @@ class DanfossAllyRoomClimate(DanfossAllyEntityBase, ClimateEntity):
     _attr_min_temp = MIN_TEMP
     _attr_max_temp = MAX_TEMP
     _attr_target_temperature_step = TEMP_STEP
-    _attr_preset_modes = [PRESET_SCHEDULE, PRESET_SCHEDULE_PREHEAT]
+    _attr_preset_modes = [PRESET_NONE, PRESET_SCHEDULE, PRESET_SCHEDULE_PREHEAT]
 
     def __init__(
         self,
