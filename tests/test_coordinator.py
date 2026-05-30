@@ -14,7 +14,6 @@ from homeassistant.helpers import device_registry as dr
 from custom_components.danfoss_ally_gateway.backend.z2m import Z2MBackend
 from custom_components.danfoss_ally_gateway.const import (
     LOAD_BALANCE_DISABLED_VALUE,
-    SCHEDULE_MODE_ECO,
     SCHEDULE_MODE_MANUAL,
     SCHEDULE_MODE_SCHEDULE,
     SCHEDULE_MODE_SCHEDULE_PREHEAT,
@@ -1624,12 +1623,15 @@ class TestScheduleProgramming:
 
         await coord.async_teardown()
 
-    async def test_set_programming_mode_pause(self, hass, mock_backend, subentry_data):
+    async def test_set_programming_mode_pause_raises(
+        self, hass, mock_backend, subentry_data
+    ):
+        """'pause' is no longer a valid option and should raise ValueError."""
         coord = RoomCoordinator(hass, mock_backend, subentry_data)
         await coord.async_setup()
 
-        await coord.async_set_programming_mode_option("pause")
-        assert coord.schedule_mode == SCHEDULE_MODE_ECO
+        with pytest.raises(ValueError, match="Invalid"):
+            await coord.async_set_programming_mode_option("pause")
 
         await coord.async_teardown()
 
@@ -1657,9 +1659,6 @@ class TestScheduleProgramming:
 
         await coord.async_set_schedule_mode(enabled=False)
         assert coord.schedule_mode == SCHEDULE_MODE_MANUAL
-
-        await coord.async_set_schedule_mode(enabled=True, eco=True)
-        assert coord.schedule_mode == SCHEDULE_MODE_ECO
 
         await coord.async_teardown()
 

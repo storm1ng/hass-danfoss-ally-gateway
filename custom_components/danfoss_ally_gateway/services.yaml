@@ -83,12 +83,3 @@ set_schedule_mode:
       default: false
       selector:
         boolean:
-    eco:
-      name: Eco / Pause mode
-      description: >-
-        True to enable eco (pause) mode. Overrides the enabled and preheat
-        settings. In eco mode the TRV holds the away / minimum temperature.
-      required: false
-      default: false
-      selector:
-        boolean:

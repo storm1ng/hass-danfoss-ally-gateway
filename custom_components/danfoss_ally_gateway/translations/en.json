@@ -145,8 +145,19 @@
                 "state": {
                     "manual": "Manual",
                     "schedule": "Schedule",
-                    "schedule_with_preheat": "Schedule + Preheat",
-                    "pause": "Pause"
+                    "schedule_with_preheat": "Schedule + Preheat"
+                }
+            }
+        },
+        "climate": {
+            "room": {
+                "state_attributes": {
+                    "preset_mode": {
+                        "state": {
+                            "schedule": "Schedule",
+                            "schedule_with_preheat": "Schedule + Preheat"
+                        }
+                    }
                 }
             }
         },

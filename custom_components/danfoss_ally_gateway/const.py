@@ -109,26 +109,24 @@ POWER_CYCLE_CHECK_INTERVAL: Final = 6 * 60 * 60  # 6 hours (safety-net fallback)
 SCHEDULE_MODE_MANUAL: Final = 0  # Bit0=0, Bit1=0 -> manual, no preheat
 SCHEDULE_MODE_SCHEDULE: Final = 1  # Bit0=1, Bit1=0 -> schedule, no preheat
 SCHEDULE_MODE_SCHEDULE_PREHEAT: Final = 3  # Bit0=1, Bit1=1 -> schedule + preheat
-SCHEDULE_MODE_ECO: Final = 4  # Bit2=1 -> eco / pause mode
+SCHEDULE_MODE_ECO: Final = 4  # Bit2=1 — unused: not implemented by Danfoss firmware
 
 # ── Programming mode option strings ───────────────────────────────────
 PROGRAMMING_MODE_OPTION_MANUAL: Final = "manual"
 PROGRAMMING_MODE_OPTION_SCHEDULE: Final = "schedule"
 PROGRAMMING_MODE_OPTION_SCHEDULE_PREHEAT: Final = "schedule_with_preheat"
-PROGRAMMING_MODE_OPTION_PAUSE: Final = "pause"
+PROGRAMMING_MODE_OPTION_PAUSE: Final = "pause"  # Unused: kept for reference only
 
 PROGRAMMING_MODE_OPTIONS: Final = [
     PROGRAMMING_MODE_OPTION_MANUAL,
     PROGRAMMING_MODE_OPTION_SCHEDULE,
     PROGRAMMING_MODE_OPTION_SCHEDULE_PREHEAT,
-    PROGRAMMING_MODE_OPTION_PAUSE,
 ]
 
 PROGRAMMING_MODE_TO_INT: Final[dict[str, int]] = {
     PROGRAMMING_MODE_OPTION_MANUAL: SCHEDULE_MODE_MANUAL,
     PROGRAMMING_MODE_OPTION_SCHEDULE: SCHEDULE_MODE_SCHEDULE,
     PROGRAMMING_MODE_OPTION_SCHEDULE_PREHEAT: SCHEDULE_MODE_SCHEDULE_PREHEAT,
-    PROGRAMMING_MODE_OPTION_PAUSE: SCHEDULE_MODE_ECO,
 }
 
 PROGRAMMING_MODE_FROM_INT: Final[dict[int, str]] = {

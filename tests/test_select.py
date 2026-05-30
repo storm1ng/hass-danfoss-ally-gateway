@@ -7,7 +7,6 @@ import pytest
 from custom_components.danfoss_ally_gateway.const import (
     DOMAIN,
     PROGRAMMING_MODE_OPTIONS,
-    SCHEDULE_MODE_ECO,
     SCHEDULE_MODE_SCHEDULE,
     SCHEDULE_MODE_SCHEDULE_PREHEAT,
 )
@@ -70,27 +69,6 @@ class TestProgrammingModeSelect:
         await coordinator.async_teardown()
 
     @pytest.mark.asyncio
-    async def test_select_option_pause(self, hass, mock_backend, subentry_data):
-        """Selecting 'pause' sets eco mode."""
-        coordinator = RoomCoordinator(hass, mock_backend, subentry_data)
-        await coordinator.async_setup()
-
-        entity = DanfossAllyProgrammingModeSelect(
-            coordinator=coordinator,
-            config_entry_id="test_entry",
-            subentry_id="test_sub",
-        )
-
-        await entity.async_select_option("pause")
-
-        assert coordinator.schedule_mode == SCHEDULE_MODE_ECO
-        # Check the mode value passed to backend
-        for call in mock_backend.async_set_programming_mode.call_args_list:
-            assert call.args[1] == SCHEDULE_MODE_ECO
-
-        await coordinator.async_teardown()
-
-    @pytest.mark.asyncio
     async def test_select_option_schedule_preheat(
         self, hass, mock_backend, subentry_data
     ):
@@ -124,9 +102,9 @@ class TestProgrammingModeSelect:
             subentry_id="test_sub",
         )
 
-        await coordinator.async_set_programming_mode_option("pause")
+        await coordinator.async_set_programming_mode_option("schedule")
         # Simulate the callback updating
         entity._attr_current_option = coordinator.schedule_mode_option
-        assert entity.current_option == "pause"
+        assert entity.current_option == "schedule"
 
         await coordinator.async_teardown()

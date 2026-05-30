@@ -2,14 +2,24 @@
 
 from __future__ import annotations
 
-from homeassistant.components.climate.const import HVACAction, HVACMode
+from homeassistant.components.climate.const import (
+    PRESET_NONE,
+    ClimateEntityFeature,
+    HVACAction,
+    HVACMode,
+)
 from homeassistant.const import ATTR_TEMPERATURE
 
 from custom_components.danfoss_ally_gateway.climate import (
     DanfossAllyRoomClimate,
     create_room_entities,
 )
-from custom_components.danfoss_ally_gateway.const import DOMAIN
+from custom_components.danfoss_ally_gateway.const import (
+    DOMAIN,
+    SCHEDULE_MODE_MANUAL,
+    SCHEDULE_MODE_SCHEDULE,
+    SCHEDULE_MODE_SCHEDULE_PREHEAT,
+)
 
 
 class TestClimateEntityCreation:
@@ -146,3 +156,79 @@ class TestClimateEntityState:
         assert entity.min_temp == 5.0
         assert entity.max_temp == 35.0
         assert entity.target_temperature_step == 0.5
+
+
+class TestClimatePresetMode:
+    """Tests for climate entity preset mode."""
+
+    def test_supported_features_include_preset(self, hass, mock_backend, subentry_data):
+        from custom_components.danfoss_ally_gateway.coordinator import RoomCoordinator
+
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        entity = create_room_entities(coord, "entry1", "sub1")[0]
+        assert entity.supported_features & ClimateEntityFeature.PRESET_MODE
+
+    def test_preset_modes_list(self, hass, mock_backend, subentry_data):
+        from custom_components.danfoss_ally_gateway.coordinator import RoomCoordinator
+
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        entity = create_room_entities(coord, "entry1", "sub1")[0]
+        assert entity.preset_modes == ["schedule", "schedule_with_preheat"]
+
+    def test_preset_mode_default_none(self, hass, mock_backend, subentry_data):
+        from custom_components.danfoss_ally_gateway.coordinator import RoomCoordinator
+
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        entity = create_room_entities(coord, "entry1", "sub1")[0]
+        assert entity.preset_mode == PRESET_NONE
+
+    def test_preset_mode_schedule(self, hass, mock_backend, subentry_data):
+        from custom_components.danfoss_ally_gateway.coordinator import RoomCoordinator
+
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        coord._schedule._mode = SCHEDULE_MODE_SCHEDULE
+        entity = create_room_entities(coord, "entry1", "sub1")[0]
+        assert entity.preset_mode == "schedule"
+
+    def test_preset_mode_schedule_with_preheat(self, hass, mock_backend, subentry_data):
+        from custom_components.danfoss_ally_gateway.coordinator import RoomCoordinator
+
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        coord._schedule._mode = SCHEDULE_MODE_SCHEDULE_PREHEAT
+        entity = create_room_entities(coord, "entry1", "sub1")[0]
+        assert entity.preset_mode == "schedule_with_preheat"
+
+    async def test_set_preset_mode_schedule(self, hass, mock_backend, subentry_data):
+        from custom_components.danfoss_ally_gateway.coordinator import RoomCoordinator
+
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        await coord.async_setup()
+        entity = create_room_entities(coord, "entry1", "sub1")[0]
+
+        await entity.async_set_preset_mode("schedule")
+        assert coord.schedule_mode == SCHEDULE_MODE_SCHEDULE
+        await coord.async_teardown()
+
+    async def test_set_preset_mode_none(self, hass, mock_backend, subentry_data):
+        from custom_components.danfoss_ally_gateway.coordinator import RoomCoordinator
+
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        await coord.async_setup()
+        entity = create_room_entities(coord, "entry1", "sub1")[0]
+
+        await entity.async_set_preset_mode(PRESET_NONE)
+        assert coord.schedule_mode == SCHEDULE_MODE_MANUAL
+        await coord.async_teardown()
+
+    async def test_set_preset_mode_schedule_with_preheat(
+        self, hass, mock_backend, subentry_data
+    ):
+        from custom_components.danfoss_ally_gateway.coordinator import RoomCoordinator
+
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        await coord.async_setup()
+        entity = create_room_entities(coord, "entry1", "sub1")[0]
+
+        await entity.async_set_preset_mode("schedule_with_preheat")
+        assert coord.schedule_mode == SCHEDULE_MODE_SCHEDULE_PREHEAT
+        await coord.async_teardown()

@@ -14,6 +14,7 @@ from typing import Any
 
 from homeassistant.components.climate import ClimateEntity
 from homeassistant.components.climate.const import (
+    PRESET_NONE,
     ClimateEntityFeature,
     HVACAction,
     HVACMode,
@@ -35,6 +36,17 @@ _LOGGER = logging.getLogger(__name__)
 MIN_TEMP = 5.0
 MAX_TEMP = 35.0
 TEMP_STEP = 0.5
+
+# Preset mode constants
+PRESET_SCHEDULE = "schedule"
+PRESET_SCHEDULE_PREHEAT = "schedule_with_preheat"
+
+_OPTION_TO_PRESET: dict[str, str] = {
+    "manual": PRESET_NONE,
+    "schedule": PRESET_SCHEDULE,
+    "schedule_with_preheat": PRESET_SCHEDULE_PREHEAT,
+}
+_PRESET_TO_OPTION: dict[str, str] = {v: k for k, v in _OPTION_TO_PRESET.items()}
 
 
 async def async_setup_entry(
@@ -75,10 +87,13 @@ class DanfossAllyRoomClimate(DanfossAllyEntityBase, ClimateEntity):
     _attr_translation_key = "room"
     _attr_temperature_unit = UnitOfTemperature.CELSIUS
     _attr_hvac_modes = [HVACMode.HEAT]
-    _attr_supported_features = ClimateEntityFeature.TARGET_TEMPERATURE
+    _attr_supported_features = (
+        ClimateEntityFeature.TARGET_TEMPERATURE | ClimateEntityFeature.PRESET_MODE
+    )
     _attr_min_temp = MIN_TEMP
     _attr_max_temp = MAX_TEMP
     _attr_target_temperature_step = TEMP_STEP
+    _attr_preset_modes = [PRESET_SCHEDULE, PRESET_SCHEDULE_PREHEAT]
 
     def __init__(
         self,
@@ -109,6 +124,12 @@ class DanfossAllyRoomClimate(DanfossAllyEntityBase, ClimateEntity):
         if self._coordinator.state.max_pi_heating_demand > 0:
             return HVACAction.HEATING
         return HVACAction.IDLE
+
+    @property
+    def preset_mode(self) -> str | None:
+        """Return the current preset mode."""
+        option = self._coordinator.schedule_mode_option
+        return _OPTION_TO_PRESET.get(option, PRESET_NONE)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -147,6 +168,11 @@ class DanfossAllyRoomClimate(DanfossAllyEntityBase, ClimateEntity):
             return
 
         await self._coordinator.async_set_room_temperature(temperature)
+
+    async def async_set_preset_mode(self, preset_mode: str) -> None:
+        """Set the preset mode."""
+        option = _PRESET_TO_OPTION.get(preset_mode, "manual")
+        await self._coordinator.async_set_programming_mode_option(option)
 
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
         """Set HVAC mode - only HEAT is supported."""

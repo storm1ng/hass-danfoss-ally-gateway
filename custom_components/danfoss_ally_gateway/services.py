@@ -23,7 +23,6 @@ ATTR_SUBENTRY_ID = "subentry_id"
 ATTR_SCHEDULE = "schedule"
 ATTR_ENABLED = "enabled"
 ATTR_PREHEAT = "preheat"
-ATTR_ECO = "eco"
 
 SET_ROOM_SCHEDULE_SCHEMA = vol.Schema(
     {
@@ -46,7 +45,6 @@ SET_SCHEDULE_MODE_SCHEMA = vol.Schema(
         vol.Required(ATTR_SUBENTRY_ID): str,
         vol.Required(ATTR_ENABLED): bool,
         vol.Optional(ATTR_PREHEAT, default=False): bool,
-        vol.Optional(ATTR_ECO, default=False): bool,
     }
 )
 
@@ -143,14 +141,11 @@ async def async_handle_set_schedule_mode(call: ServiceCall) -> None:
     subentry_id = call.data[ATTR_SUBENTRY_ID]
     enabled = call.data[ATTR_ENABLED]
     preheat = call.data.get(ATTR_PREHEAT, False)
-    eco = call.data.get(ATTR_ECO, False)
 
     coordinator = _get_coordinator(hass, config_entry_id, subentry_id)
 
     try:
-        await coordinator.async_set_schedule_mode(
-            enabled=enabled, preheat=preheat, eco=eco
-        )
+        await coordinator.async_set_schedule_mode(enabled=enabled, preheat=preheat)
     except Exception as err:
         raise HomeAssistantError(f"Failed to set schedule mode: {err}") from err
 

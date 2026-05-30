@@ -631,10 +631,10 @@ class RoomCoordinator:
         await self._schedule.async_program_schedule(schedule)
 
     async def async_set_schedule_mode(
-        self, enabled: bool, preheat: bool = False, eco: bool = False
+        self, enabled: bool, preheat: bool = False
     ) -> None:
         """Set thermostat programming operation mode on all TRVs."""
-        await self._schedule.async_set_schedule_mode(enabled, preheat, eco)
+        await self._schedule.async_set_schedule_mode(enabled, preheat)
 
     async def async_clear_schedule(self) -> None:
         """Clear schedule on all TRVs and set manual mode."""

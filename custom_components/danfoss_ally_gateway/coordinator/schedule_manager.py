@@ -19,7 +19,6 @@ from ..const import (
     PROGRAMMING_MODE_FROM_INT,
     PROGRAMMING_MODE_TO_INT,
     SCHEDULE_DOW_ALL,
-    SCHEDULE_MODE_ECO,
     SCHEDULE_MODE_MANUAL,
     SCHEDULE_MODE_SCHEDULE,
     SCHEDULE_MODE_SCHEDULE_PREHEAT,
@@ -117,12 +116,10 @@ class ScheduleDelegate:
         self._notify_fn()
 
     async def async_set_schedule_mode(
-        self, enabled: bool, preheat: bool = False, eco: bool = False
+        self, enabled: bool, preheat: bool = False
     ) -> None:
         """Set thermostat programming operation mode on all TRVs."""
-        if eco:
-            mode = SCHEDULE_MODE_ECO
-        elif enabled:
+        if enabled:
             mode = SCHEDULE_MODE_SCHEDULE_PREHEAT if preheat else SCHEDULE_MODE_SCHEDULE
         else:
             mode = SCHEDULE_MODE_MANUAL
