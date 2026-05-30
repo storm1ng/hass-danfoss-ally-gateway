@@ -65,9 +65,6 @@ class SetpointDelegate:
 
         Returns the new setpoint if forwarded, None otherwise.
         """
-        if self._programmatic:
-            return None
-
         new_setpoint = new_state.occupied_heating_setpoint
         old_setpoint = old_state.occupied_heating_setpoint
 
@@ -85,9 +82,14 @@ class SetpointDelegate:
             new_setpoint,
         )
 
-        # Forward to other TRVs
+        # Forward to other TRVs.  The _programmatic guard is checked inside
+        # the lock so that a second manual change arriving while the first is
+        # still being forwarded will wait and re-evaluate rather than being
+        # silently dropped.
         if len(self._trv_ids) > 1:
             async with self._lock:
+                if self._programmatic:
+                    return None
                 self._programmatic = True
                 try:
                     for other_trv in self._trv_ids:
