@@ -225,7 +225,7 @@ class RoomCoordinator:
         _LOGGER.info("Setting up room coordinator for '%s'", self._room_name)
 
         # Resolve device registry IDs
-        self._trv_ids = [self._resolve_trv_id(tid) for tid in self._trv_ids]
+        self._trv_ids[:] = [self._resolve_trv_id(tid) for tid in self._trv_ids]
 
         # Rebuild delegate TRV tracking with resolved IDs
         self._ext_temp.rebuild_trv_ids(self._trv_ids)

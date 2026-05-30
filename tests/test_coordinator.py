@@ -891,6 +891,45 @@ class TestDeviceIdResolution:
         z2m_backend.async_subscribe_trv.assert_any_call("TRV Two")
         await coord.async_teardown()
 
+    async def test_setup_resolves_trv_ids_in_all_delegates(
+        self, hass, mock_config_entry
+    ):
+        """async_setup propagates resolved TRV IDs to all delegates."""
+        device_reg = dr.async_get(hass)
+
+        dev1 = device_reg.async_get_or_create(
+            config_entry_id=mock_config_entry.entry_id,
+            identifiers={("mqtt", "zigbee2mqtt_0x001")},
+            name="TRV One",
+            manufacturer="Danfoss",
+            model="Ally thermostat",
+        )
+        dev2 = device_reg.async_get_or_create(
+            config_entry_id=mock_config_entry.entry_id,
+            identifiers={("mqtt", "zigbee2mqtt_0x002")},
+            name="TRV Two",
+            manufacturer="Popp",
+            model="Smart thermostat",
+        )
+
+        z2m_backend = MagicMock(spec=Z2MBackend)
+        z2m_backend.register_state_callback = MagicMock(return_value=lambda: None)
+        z2m_backend.async_subscribe_trv = AsyncMock()
+
+        data = make_subentry_data(trv_ids=[dev1.id, dev2.id])
+        coord = RoomCoordinator(hass, z2m_backend, data)
+        await coord.async_setup()
+
+        expected = ["TRV One", "TRV Two"]
+        assert coord._schedule._trv_ids == expected
+        assert coord._setpoint._trv_ids == expected
+        assert coord._window._trv_ids == expected
+        assert coord._preheat._trv_ids == expected
+        assert coord._load_balance._trv_ids == expected
+        assert coord._time_sync._trv_ids == expected
+        assert coord._ext_temp._trv_ids == expected
+        await coord.async_teardown()
+
     async def test_backwards_compat_old_friendly_names(self, hass, mock_backend):
         """Old subentries storing friendly names directly still work."""
         data = make_subentry_data(trv_ids=["Living Room TRV", "Kitchen TRV"])

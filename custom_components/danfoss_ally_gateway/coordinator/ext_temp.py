@@ -65,7 +65,6 @@ class ExtTempDelegate:
 
     def rebuild_trv_ids(self, trv_ids: list[str]) -> None:
         """Rebuild tracking after TRV IDs are resolved."""
-        self._trv_ids = trv_ids
         self._trv_state = {trv_id: ExtTempTRVState() for trv_id in trv_ids}
 
     def update_covered(self, trv_id: str, covered: bool) -> None:
