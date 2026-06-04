@@ -40,7 +40,10 @@
     },
     "config_subentries": {
         "room": {
-            "title": "Room",
+            "entry_type": "Room",
+            "initiate_flow": {
+                "user": "Add room"
+            },
             "step": {
                 "user": {
                     "title": "Add Room",
