@@ -31,8 +31,7 @@ jobs:
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
-        files: |
-          danfoss_ally_gateway.zip
-          danfoss_ally_gateway.tar.gz
-        tag_name: ${{ github.ref_name }}
-        generate_release_notes: true
+          files: |
+            danfoss_ally_gateway.zip
+            danfoss_ally_gateway.tar.gz
+          generate_release_notes: true
