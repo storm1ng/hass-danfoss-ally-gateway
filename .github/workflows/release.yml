@@ -3,7 +3,7 @@ name: Release
 on:
   push:
     tags:
-      - "v*"
+      - "v*.*.*"
 
 permissions:
   contents: write
@@ -15,7 +15,24 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Create release archives
+        run: |
+          # Create zip with files at root (for HACS)
+          cd custom_components/danfoss_ally_gateway
+          zip -r ../../danfoss_ally_gateway.zip . -x "*.DS_Store" "*/.DS_Store"
+
+          # Create alternative tar.gz
+          tar -czf ../../danfoss_ally_gateway.tar.gz --exclude="*.DS_Store" .
+          cd ../..
+
+          echo "Created archives:"
+          ls -la *.zip *.tar.gz
+
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
-          generate_release_notes: true
+        files: |
+          danfoss_ally_gateway.zip
+          danfoss_ally_gateway.tar.gz
+        tag_name: ${{ github.ref_name }}
+        generate_release_notes: true
