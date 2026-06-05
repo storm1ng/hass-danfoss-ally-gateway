@@ -15,6 +15,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Detect pre-release
+        id: detect
+        run: |
+          TAG="${{ github.ref_name }}"
+          if [[ "$TAG" =~ b[0-9]+$ ]] || [[ "$TAG" =~ rc[0-9]+$ ]]; then
+            echo "prerelease=true" >> $GITHUB_OUTPUT
+          else
+            echo "prerelease=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Create release archives
         run: |
           # Create zip with files at root (for HACS)
@@ -31,6 +41,7 @@ jobs:
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
+          prerelease: ${{ steps.detect.outputs.prerelease }}
           files: |
             danfoss_ally_gateway.zip
             danfoss_ally_gateway.tar.gz
