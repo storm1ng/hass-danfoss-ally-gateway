@@ -18,6 +18,7 @@ from homeassistant.helpers import entity_registry as er
 
 from .backend import DanfossBackend
 from .backend.z2m import Z2MBackend
+from .backend.zha import ZHABackend
 from .const import (
     BACKEND_Z2M,
     BACKEND_ZHA,
@@ -121,7 +122,8 @@ def _create_backend(hass: HomeAssistant, entry: ConfigEntry) -> DanfossBackend:
     if backend_type == BACKEND_Z2M:
         base_topic = entry.data.get(CONF_MQTT_BASE_TOPIC, "zigbee2mqtt")
         return Z2MBackend(hass, base_topic)
-    # ZHA Backend is not implemented yet
+    if backend_type == BACKEND_ZHA:
+        return ZHABackend(hass)
     raise ValueError(f"Unknown backend type: {backend_type}")
 
 
