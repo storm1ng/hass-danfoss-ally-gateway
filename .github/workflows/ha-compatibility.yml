@@ -16,8 +16,12 @@ jobs:
       matrix:
         include:
           - homeassistant-version: "2025.6.0"
+            test-helper-version: "0.13.251"
+            extra-pins: "pycares>=4.0.0,<5.0.0"
             label: "minimum (2025.6.0)"
           - homeassistant-version: ""
+            test-helper-version: ""
+            extra-pins: ""
             label: "latest stable"
     name: "HA ${{ matrix.label }}"
     steps:
@@ -33,7 +37,10 @@ jobs:
         run: |
           pip install -r requirements_test.txt
           if [ -n "${{ matrix.homeassistant-version }}" ]; then
-            pip install homeassistant==${{ matrix.homeassistant-version }}
+            pip install \
+              "homeassistant==${{ matrix.homeassistant-version }}" \
+              "pytest-homeassistant-custom-component==${{ matrix.test-helper-version }}" \
+              "${{ matrix.extra-pins }}"
           else
             pip install homeassistant
           fi
