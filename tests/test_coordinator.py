@@ -1960,3 +1960,297 @@ class TestRemoteClimateSync:
         state.attributes = {}
         result = RoomCoordinator._extract_remote_climate_setpoint(state)
         assert result is None
+
+
+# ── Window Delegate Exception Handling ────────────────────────────────
+
+
+class TestWindowExceptionHandling:
+    """Tests for exception handler branches in WindowDelegate."""
+
+    async def test_window_state_none_early_return(
+        self, hass, mock_backend, subentry_data
+    ):
+        """window_open_detection=None should cause early return (no coordination)."""
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        await coord.async_setup()
+
+        state = make_trv_state("trv_1", window_open_detection=None)
+        mock_backend.fire_state_update("trv_1", state)
+        await hass.async_block_till_done()
+
+        mock_backend.async_set_external_window_open.assert_not_called()
+        await coord.async_teardown()
+
+    async def test_force_open_exception_logged(
+        self, hass, mock_backend, subentry_data, caplog
+    ):
+        """Exception in async_set_external_window_open(True) is caught and logged."""
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        await coord.async_setup()
+
+        mock_backend.async_set_external_window_open.side_effect = RuntimeError(
+            "test error"
+        )
+
+        state = make_trv_state("trv_1", window_open_detection=WINDOW_OPEN_DETECTED)
+        mock_backend.fire_state_update("trv_1", state)
+        await hass.async_block_till_done()
+
+        assert "Failed to set external_window_open on trv_2" in caplog.text
+        # TRV should NOT have been added to forced set since the call failed
+        assert "trv_2" not in coord._forced_window_open_trvs
+        await coord.async_teardown()
+
+    async def test_orphan_clear_exception_logged(
+        self, hass, mock_backend, subentry_data, caplog
+    ):
+        """Exception clearing orphaned external_window_open is caught and logged."""
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        await coord.async_setup()
+
+        mock_backend.async_set_external_window_open.side_effect = RuntimeError(
+            "test error"
+        )
+
+        # TRV reports state 4 but is not tracked -> orphan
+        assert len(coord._forced_window_open_trvs) == 0
+        state = make_trv_state("trv_1", window_open_detection=WINDOW_OPEN_EXTERNAL_OPEN)
+        mock_backend.fire_state_update("trv_1", state)
+        await hass.async_block_till_done()
+
+        assert "Failed to clear orphaned external_window_open on trv_1" in caplog.text
+        await coord.async_teardown()
+
+    async def test_deactivate_exception_logged(
+        self, hass, mock_backend, subentry_data, caplog
+    ):
+        """Exception during deactivation (clearing forced TRVs) is caught and logged."""
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        await coord.async_setup()
+
+        # Force trv_2 via window detection on trv_1
+        coord._forced_window_open_trvs.add("trv_2")
+        coord.state.trv_states["trv_2"] = make_trv_state(
+            "trv_2", window_open_detection=WINDOW_OPEN_EXTERNAL_OPEN
+        )
+
+        # Now set up the exception for the deactivation call
+        mock_backend.async_set_external_window_open.side_effect = RuntimeError(
+            "test error"
+        )
+
+        # trv_1 reports window closed -> deactivation fires
+        state = make_trv_state("trv_1", window_open_detection=1)
+        mock_backend.fire_state_update("trv_1", state)
+        await hass.async_block_till_done()
+
+        assert "Failed to clear external_window_open on trv_2" in caplog.text
+        # forced_trvs should still be cleared after the loop
+        assert len(coord._forced_window_open_trvs) == 0
+        await coord.async_teardown()
+
+
+# ── Preheat Delegate Exception Handling ───────────────────────────────
+
+
+class TestPreheatExceptionHandling:
+    """Tests for exception handler branches in PreheatDelegate."""
+
+    async def test_preheat_forward_exception_logged(
+        self, hass, mock_backend, subentry_data, caplog
+    ):
+        """Exception in async_send_preheat_command is caught and logged."""
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        await coord.async_setup()
+
+        mock_backend.async_send_preheat_command.side_effect = RuntimeError("test error")
+
+        mock_backend.fire_state_update(
+            "trv_1",
+            make_trv_state("trv_1", preheat_status=True, preheat_time=1234),
+        )
+        await hass.async_block_till_done()
+
+        assert "Failed to forward preheat to TRV trv_2" in caplog.text
+        await coord.async_teardown()
+
+
+# ── Load Balancer Exception Handling ──────────────────────────────────
+
+
+class TestLoadBalancerExceptionHandling:
+    """Tests for exception handler branches and early returns in LoadBalanceDelegate."""
+
+    async def test_async_run_early_return_single_trv(
+        self, hass, mock_backend, single_trv_subentry_data
+    ):
+        """_async_run() returns None early when only one TRV."""
+        coord = RoomCoordinator(hass, mock_backend, single_trv_subentry_data)
+        await coord.async_setup()
+
+        result = await coord._load_balance._async_run()
+        assert result is None
+        mock_backend.async_set_load_room_mean.assert_not_called()
+        await coord.async_teardown()
+
+    async def test_async_enable_early_return_single_trv(
+        self, hass, mock_backend, single_trv_subentry_data
+    ):
+        """async_enable() returns early when only one TRV."""
+        coord = RoomCoordinator(hass, mock_backend, single_trv_subentry_data)
+        await coord.async_setup()
+
+        await coord._load_balance.async_enable()
+        mock_backend.async_set_load_balancing_enable.assert_not_called()
+        await coord.async_teardown()
+
+    async def test_async_run_set_load_room_mean_exception_logged(
+        self, hass, mock_backend, subentry_data, caplog
+    ):
+        """Exception in async_set_load_room_mean during _async_run is caught."""
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        await coord.async_setup()
+
+        # Populate valid load estimates
+        mock_backend.fire_state_update(
+            "trv_1", make_trv_state("trv_1", load_estimate=100)
+        )
+        mock_backend.fire_state_update(
+            "trv_2", make_trv_state("trv_2", load_estimate=200)
+        )
+        await hass.async_block_till_done()
+
+        mock_backend.async_set_load_room_mean.side_effect = RuntimeError("test error")
+
+        result = await coord._load_balance._async_run()
+        # Should still return the computed mean
+        assert result == 150
+        assert "Failed to set load_room_mean on TRV" in caplog.text
+        await coord.async_teardown()
+
+    async def test_async_enable_exception_logged(
+        self, hass, mock_backend, subentry_data, caplog
+    ):
+        """Exception in async_set_load_balancing_enable during enable is caught."""
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        await coord.async_setup()
+
+        # Disable first so we can re-enable
+        await coord.async_disable_load_balancing()
+        mock_backend.async_set_load_balancing_enable.reset_mock()
+
+        mock_backend.async_set_load_balancing_enable.side_effect = RuntimeError(
+            "test error"
+        )
+
+        # Should not raise despite the exception
+        await coord._load_balance.async_enable()
+        assert "Failed to set load_balancing_enable on" in caplog.text
+        await coord.async_teardown()
+
+    async def test_async_disable_set_load_room_mean_exception_logged(
+        self, hass, mock_backend, subentry_data, caplog
+    ):
+        """Exception in async_set_load_room_mean during disable is caught."""
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        await coord.async_setup()
+
+        mock_backend.async_set_load_room_mean.side_effect = RuntimeError("test error")
+
+        await coord.async_disable_load_balancing()
+        assert "Failed to send disabled load_room_mean to" in caplog.text
+        await coord.async_teardown()
+
+    async def test_async_disable_set_load_balancing_enable_exception_logged(
+        self, hass, mock_backend, subentry_data, caplog
+    ):
+        """Exception in async_set_load_balancing_enable(False) during disable is caught."""
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        await coord.async_setup()
+
+        mock_backend.async_set_load_balancing_enable.side_effect = RuntimeError(
+            "test error"
+        )
+
+        await coord.async_disable_load_balancing()
+        assert "Failed to set load_balancing_enable on" in caplog.text
+        await coord.async_teardown()
+
+    async def test_async_setup_trvs_exception_logged(
+        self, hass, mock_backend, subentry_data, caplog
+    ):
+        """Exception in async_set_load_balancing_enable during setup_trvs is caught."""
+        mock_backend.async_set_load_balancing_enable.side_effect = RuntimeError(
+            "test error"
+        )
+
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        # async_setup calls async_setup_trvs internally
+        await coord.async_setup()
+
+        assert "Failed to set load_balancing_enable on" in caplog.text
+        await coord.async_teardown()
+
+
+# ── Setpoint Delegate Exception Handling ──────────────────────────────
+
+
+class TestSetpointExceptionHandling:
+    """Tests for exception handler branches in SetpointDelegate."""
+
+    async def test_is_programmatic_property(self, hass, mock_backend, subentry_data):
+        """is_programmatic property returns False by default."""
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        await coord.async_setup()
+
+        assert coord._setpoint.is_programmatic is False
+        await coord.async_teardown()
+
+    async def test_forward_setpoint_exception_logged(
+        self, hass, mock_backend, subentry_data, caplog
+    ):
+        """Exception in async_send_setpoint_command is caught and logged."""
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        await coord.async_setup()
+
+        mock_backend.async_send_setpoint_command.side_effect = RuntimeError(
+            "test error"
+        )
+
+        # Initial state
+        old = make_trv_state("trv_1", occupied_heating_setpoint=20.0)
+        mock_backend.fire_state_update("trv_1", old)
+        await hass.async_block_till_done()
+
+        # Manual dial change
+        new = make_trv_state(
+            "trv_1",
+            occupied_heating_setpoint=22.0,
+            setpoint_change_source=SETPOINT_SOURCE_MANUAL,
+        )
+        mock_backend.fire_state_update("trv_1", new)
+        await hass.async_block_till_done()
+
+        assert "Failed to forward setpoint to TRV trv_2" in caplog.text
+        # _programmatic should be reset to False after the exception
+        assert coord._setpoint.is_programmatic is False
+        await coord.async_teardown()
+
+    async def test_set_room_temperature_exception_logged(
+        self, hass, mock_backend, subentry_data, caplog
+    ):
+        """Exception in async_set_occupied_heating_setpoint is caught and logged."""
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        await coord.async_setup()
+
+        mock_backend.async_set_occupied_heating_setpoint.side_effect = RuntimeError(
+            "test error"
+        )
+
+        await coord.async_set_room_temperature(23.0)
+
+        assert "Failed to set setpoint on TRV" in caplog.text
+        # _programmatic should be reset to False after the exception
+        assert coord._setpoint.is_programmatic is False
+        await coord.async_teardown()

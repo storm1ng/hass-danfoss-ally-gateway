@@ -659,3 +659,62 @@ class TestFromHaSchedule:
         ]
         schedule = from_ha_schedule(blocks, at_home_temp=21.0, away_temp=17.0)
         assert len(schedule.days[0].events) == 2
+
+
+# ── WeeklySchedule.from_dict edge cases ───────────────────────────────
+
+
+class TestFromDictEdgeCases:
+    """Tests for WeeklySchedule.from_dict with excess days."""
+
+    def test_from_dict_more_than_7_days(self):
+        """Days beyond the 7th are silently ignored (break at i >= 7)."""
+        data = {
+            "days": [
+                [{"time": i * 60, "temp": 20.0}]
+                for i in range(10)  # 10 day entries
+            ]
+        }
+        ws = WeeklySchedule.from_dict(data)
+        # Only the first 7 days should be populated
+        for i in range(7):
+            assert len(ws.days[i].events) == 1
+            assert ws.days[i].events[0].minutes_since_midnight == i * 60
+        # Schedule should still have exactly 7 days
+        assert len(ws.days) == 7
+
+
+# ── Midnight crossing: next day at max transitions ────────────────────
+
+
+class TestMidnightCrossingMaxNextDay:
+    """Tests for apply_midnight_crossing when next day is at max transitions."""
+
+    def test_cannot_add_0000_next_day_at_max(self, caplog):
+        """Warning logged when next day already has max transitions."""
+        ws = WeeklySchedule()
+        # Monday: one event whose carry-over temp needs bridging
+        ws.days[1] = DaySchedule(
+            events=[
+                ScheduleEvent(360, 21.0),
+                ScheduleEvent(1320, 18.0),
+            ]
+        )
+        # Tuesday: starts at 06:00 (not 00:00) and already has 6 transitions
+        ws.days[2] = DaySchedule(
+            events=[ScheduleEvent(360 + i * 60, 20.0) for i in range(6)]
+        )
+
+        import logging
+
+        with caplog.at_level(logging.WARNING):
+            result = apply_midnight_crossing(ws)
+
+        # The warning about being unable to add 00:00 should be logged
+        assert any(
+            "cannot add 00:00 event" in msg and "max transitions" in msg
+            for msg in caplog.messages
+        )
+        # Tuesday should still have exactly 6 events (no 00:00 added)
+        assert len(result.days[2].events) == 6
+        assert all(ev.minutes_since_midnight != 0 for ev in result.days[2].events)

@@ -640,3 +640,70 @@ class TestZ2MSchedule:
         mock_mqtt.async_publish = AsyncMock()
         result = await backend.async_read_sw_error_code("trv1")
         assert result is None
+
+
+# ── Device Announce Callbacks ─────────────────────────────────────────
+
+
+class TestDeviceAnnounceCallbacks:
+    """Tests for _fire_device_announce and announce callback registration."""
+
+    @pytest.fixture
+    def backend(self, hass):
+        return Z2MBackend(hass, base_topic="zigbee2mqtt")
+
+    def test_announce_callback_fired(self, backend):
+        """Registered announce callback is called with the correct trv_id."""
+        received = []
+        backend.register_announce_callback(lambda tid: received.append(tid))
+        backend._fire_device_announce("living_trv")
+        assert received == ["living_trv"]
+
+    def test_announce_callback_multiple(self, backend):
+        """Multiple announce callbacks are all invoked."""
+        received_a = []
+        received_b = []
+        backend.register_announce_callback(lambda tid: received_a.append(tid))
+        backend.register_announce_callback(lambda tid: received_b.append(tid))
+        backend._fire_device_announce("trv1")
+        assert received_a == ["trv1"]
+        assert received_b == ["trv1"]
+
+    def test_announce_callback_unregister(self, backend):
+        """Unregistered announce callback is no longer called."""
+        received = []
+        unregister = backend.register_announce_callback(
+            lambda tid: received.append(tid)
+        )
+        unregister()
+        backend._fire_device_announce("trv1")
+        assert received == []
+
+    def test_announce_callback_no_callbacks(self, backend):
+        """Firing device announce with no callbacks does not raise."""
+        backend._fire_device_announce("trv1")
+
+
+# ── Parser Unexpected Type Edge Cases ─────────────────────────────────
+
+
+class TestParserUnexpectedTypes:
+    """Tests for parser functions receiving unexpected (non-handled) types."""
+
+    def test_window_open_unexpected_type_list(self):
+        assert _parse_window_open([]) is None
+
+    def test_window_open_unexpected_type_dict(self):
+        assert _parse_window_open({}) is None
+
+    def test_setpoint_source_unexpected_type_list(self):
+        assert _parse_setpoint_change_source([]) is None
+
+    def test_setpoint_source_unexpected_type_dict(self):
+        assert _parse_setpoint_change_source({}) is None
+
+    def test_bool_unexpected_type_list(self):
+        assert _parse_bool([]) is None
+
+    def test_bool_unexpected_type_dict(self):
+        assert _parse_bool({}) is None

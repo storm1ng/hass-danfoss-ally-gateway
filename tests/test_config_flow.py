@@ -11,15 +11,30 @@ from homeassistant.helpers import selector
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.danfoss_ally_gateway.config_flow import (
+    DanfossAllyGatewayConfigFlow,
+    RoomSubentryFlowHandler,
     _build_trv_selector,
+    _extract_room_data,
     _get_assigned_trv_ids,
 )
 from custom_components.danfoss_ally_gateway.const import (
     BACKEND_Z2M,
     BACKEND_ZHA,
+    CONF_AREA,
+    CONF_AT_HOME_TEMP,
+    CONF_AWAY_TEMP,
     CONF_BACKEND,
+    CONF_HEAT_SOURCE,
+    CONF_HEAT_SOURCE_TYPE,
     CONF_MQTT_BASE_TOPIC,
+    CONF_PREHEAT_ENABLED,
+    CONF_REMOTE_CLIMATE,
+    CONF_ROOM_NAME,
+    CONF_SCHEDULE_ENTITY,
+    CONF_TEMP_SENSOR,
     CONF_TRV_ENTITIES,
+    DEFAULT_AT_HOME_TEMP,
+    DEFAULT_AWAY_TEMP,
     DOMAIN,
     SUBENTRY_ROOM,
     SUPPORTED_TRV_DEVICES_Z2M,
@@ -332,3 +347,102 @@ class TestGetAssignedTrvIds:
             }
         )
         assert _get_assigned_trv_ids(entry) == {"trv_b"}
+
+
+# ── _extract_room_data Tests ──────────────────────────────────────────
+
+
+class TestExtractRoomData:
+    """Tests for the _extract_room_data helper."""
+
+    def test_minimal_input_returns_defaults(self):
+        """Only required fields provided; optional fields get defaults."""
+        result = _extract_room_data(
+            {CONF_ROOM_NAME: "Kitchen", CONF_TRV_ENTITIES: ["trv_1"]}
+        )
+        assert result[CONF_ROOM_NAME] == "Kitchen"
+        assert result[CONF_TRV_ENTITIES] == ["trv_1"]
+        assert result[CONF_AREA] == ""
+        assert result[CONF_TEMP_SENSOR] == ""
+        assert result[CONF_HEAT_SOURCE] == ""
+        assert result[CONF_HEAT_SOURCE_TYPE] == ""
+        assert result[CONF_REMOTE_CLIMATE] == ""
+        assert result[CONF_SCHEDULE_ENTITY] == ""
+        assert result[CONF_AT_HOME_TEMP] == DEFAULT_AT_HOME_TEMP
+        assert result[CONF_AWAY_TEMP] == DEFAULT_AWAY_TEMP
+        assert result[CONF_PREHEAT_ENABLED] is True
+
+    def test_full_input_preserves_all_values(self):
+        """All fields provided; every value is preserved in the result."""
+        user_input = {
+            CONF_ROOM_NAME: "Living Room",
+            CONF_AREA: "area_123",
+            CONF_TRV_ENTITIES: ["trv_a", "trv_b"],
+            CONF_TEMP_SENSOR: "sensor.living_room_temp",
+            CONF_HEAT_SOURCE: "climate.boiler",
+            CONF_HEAT_SOURCE_TYPE: "climate",
+            CONF_REMOTE_CLIMATE: "climate.remote",
+            CONF_SCHEDULE_ENTITY: "schedule.weekday",
+            CONF_AT_HOME_TEMP: 23.0,
+            CONF_AWAY_TEMP: 15.0,
+            CONF_PREHEAT_ENABLED: False,
+        }
+        result = _extract_room_data(user_input)
+        assert result == user_input
+
+    def test_multiple_trvs_preserved(self):
+        """TRV list with multiple entries is kept intact."""
+        trvs = ["trv_1", "trv_2", "trv_3"]
+        result = _extract_room_data(
+            {CONF_ROOM_NAME: "Bedroom", CONF_TRV_ENTITIES: trvs}
+        )
+        assert result[CONF_TRV_ENTITIES] == trvs
+
+
+# ── async_get_supported_subentry_types Tests ──────────────────────────
+
+
+class TestAsyncGetSupportedSubentryTypes:
+    """Tests for the async_get_supported_subentry_types classmethod."""
+
+    def test_returns_room_subentry_type(self):
+        """Returned dict maps SUBENTRY_ROOM to RoomSubentryFlowHandler."""
+        mock_entry = MagicMock()
+        result = DanfossAllyGatewayConfigFlow.async_get_supported_subentry_types(
+            mock_entry
+        )
+        assert result == {SUBENTRY_ROOM: RoomSubentryFlowHandler}
+
+    def test_returned_keys(self):
+        """Only the room subentry type is returned."""
+        mock_entry = MagicMock()
+        result = DanfossAllyGatewayConfigFlow.async_get_supported_subentry_types(
+            mock_entry
+        )
+        assert set(result.keys()) == {SUBENTRY_ROOM}
+
+
+# ── Invalid backend guard Tests ───────────────────────────────────────
+
+
+class TestInvalidBackendGuard:
+    """Tests for the invalid_backend error path in async_step_user.
+
+    The SelectSelector schema rejects unknown values before the flow handler
+    runs, so we call async_step_user directly to exercise the guard clause.
+    """
+
+    async def test_invalid_backend_shows_error(self, hass: HomeAssistant):
+        """Unrecognized backend value triggers invalid_backend error."""
+        # Initialise the flow so it is registered with hass
+        init_result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": config_entries.SOURCE_USER}
+        )
+        flow_id = init_result["flow_id"]
+        flow = hass.config_entries.flow._progress[flow_id]
+
+        # Call the step handler directly, bypassing schema validation
+        result = await flow.async_step_user({CONF_BACKEND: "totally_unknown"})
+        assert result["type"] == FlowResultType.FORM  # type: ignore[typeddict-item]
+        assert result["step_id"] == "user"  # type: ignore[typeddict-item]
+        assert result["errors"]["base"] == "invalid_backend"  # type: ignore[typeddict-item]
