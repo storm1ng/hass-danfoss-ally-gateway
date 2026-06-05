@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from homeassistant.exceptions import ServiceValidationError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 
 from custom_components.danfoss_ally_gateway.const import DOMAIN
 from custom_components.danfoss_ally_gateway.coordinator import RoomCoordinator
@@ -244,3 +244,178 @@ class TestSetScheduleModeService:
         for c in mock_backend.async_set_programming_mode.call_args_list:
             assert c[0][1] == 0  # SCHEDULE_MODE_MANUAL
         await coordinator.async_teardown()
+
+
+# ── Error branch tests ────────────────────────────────────────────────
+
+
+class TestSetRoomScheduleErrors:
+    """Tests for error branches in async_handle_set_room_schedule."""
+
+    async def test_from_dict_key_error(self, hass, setup_domain_data):
+        """from_dict raises KeyError on missing 'time'/'temp' keys (lines 99-100)."""
+        call = MagicMock()
+        call.hass = hass
+        call.data = {
+            ATTR_CONFIG_ENTRY_ID: "test_entry_id",
+            ATTR_SUBENTRY_ID: "test_subentry_id",
+            ATTR_SCHEDULE: {"days": [[{"wrong_key": 360}]]},
+        }
+
+        with pytest.raises(ServiceValidationError, match="Invalid schedule data"):
+            await async_handle_set_room_schedule(call)
+
+    async def test_from_dict_type_error(self, hass, setup_domain_data):
+        """from_dict raises TypeError when day_data is not iterable (lines 99-100)."""
+        call = MagicMock()
+        call.hass = hass
+        call.data = {
+            ATTR_CONFIG_ENTRY_ID: "test_entry_id",
+            ATTR_SUBENTRY_ID: "test_subentry_id",
+            ATTR_SCHEDULE: {"days": [None]},
+        }
+
+        with pytest.raises(ServiceValidationError, match="Invalid schedule data"):
+            await async_handle_set_room_schedule(call)
+
+    async def test_validate_invalid_time(self, hass, setup_domain_data):
+        """validate() returns errors for time >= 1440 (line 109)."""
+        call = MagicMock()
+        call.hass = hass
+        call.data = {
+            ATTR_CONFIG_ENTRY_ID: "test_entry_id",
+            ATTR_SUBENTRY_ID: "test_subentry_id",
+            ATTR_SCHEDULE: {
+                "days": [
+                    [{"time": 1500, "temp": 21.0}],  # time > 1439
+                    [],
+                    [],
+                    [],
+                    [],
+                    [],
+                    [],
+                ]
+            },
+        }
+
+        with pytest.raises(ServiceValidationError, match="Schedule validation failed"):
+            await async_handle_set_room_schedule(call)
+
+    async def test_validate_too_many_events(self, hass, setup_domain_data):
+        """validate() returns errors when a day has more than 6 events (line 109)."""
+        call = MagicMock()
+        call.hass = hass
+        call.data = {
+            ATTR_CONFIG_ENTRY_ID: "test_entry_id",
+            ATTR_SUBENTRY_ID: "test_subentry_id",
+            ATTR_SCHEDULE: {
+                "days": [
+                    [{"time": i * 60, "temp": 20.0} for i in range(7)],  # 7 events
+                    [],
+                    [],
+                    [],
+                    [],
+                    [],
+                    [],
+                ]
+            },
+        }
+
+        with pytest.raises(ServiceValidationError, match="Schedule validation failed"):
+            await async_handle_set_room_schedule(call)
+
+    async def test_program_schedule_value_error(self, hass, setup_domain_data):
+        """async_program_schedule raises ValueError -> ServiceValidationError (lines 117-118)."""
+        coordinator = setup_domain_data
+        coordinator.async_program_schedule = AsyncMock(
+            side_effect=ValueError("bad schedule value")
+        )
+
+        call = MagicMock()
+        call.hass = hass
+        call.data = {
+            ATTR_CONFIG_ENTRY_ID: "test_entry_id",
+            ATTR_SUBENTRY_ID: "test_subentry_id",
+            ATTR_SCHEDULE: {
+                "days": [
+                    [],
+                    [{"time": 360, "temp": 21.0}],
+                    [],
+                    [],
+                    [],
+                    [],
+                    [],
+                ]
+            },
+        }
+
+        with pytest.raises(ServiceValidationError, match="bad schedule value"):
+            await async_handle_set_room_schedule(call)
+
+    async def test_program_schedule_generic_exception(self, hass, setup_domain_data):
+        """async_program_schedule raises Exception -> HomeAssistantError (lines 119-120)."""
+        coordinator = setup_domain_data
+        coordinator.async_program_schedule = AsyncMock(side_effect=RuntimeError("fail"))
+
+        call = MagicMock()
+        call.hass = hass
+        call.data = {
+            ATTR_CONFIG_ENTRY_ID: "test_entry_id",
+            ATTR_SUBENTRY_ID: "test_subentry_id",
+            ATTR_SCHEDULE: {
+                "days": [
+                    [],
+                    [{"time": 360, "temp": 21.0}],
+                    [],
+                    [],
+                    [],
+                    [],
+                    [],
+                ]
+            },
+        }
+
+        with pytest.raises(HomeAssistantError, match="Failed to program schedule"):
+            await async_handle_set_room_schedule(call)
+
+
+class TestClearRoomScheduleErrors:
+    """Tests for error branches in async_handle_clear_room_schedule."""
+
+    async def test_clear_schedule_exception(self, hass, setup_domain_data):
+        """async_clear_schedule raises Exception -> HomeAssistantError (lines 133-134)."""
+        coordinator = setup_domain_data
+        coordinator.async_clear_schedule = AsyncMock(side_effect=RuntimeError("fail"))
+
+        call = MagicMock()
+        call.hass = hass
+        call.data = {
+            ATTR_CONFIG_ENTRY_ID: "test_entry_id",
+            ATTR_SUBENTRY_ID: "test_subentry_id",
+        }
+
+        with pytest.raises(HomeAssistantError, match="Failed to clear schedule"):
+            await async_handle_clear_room_schedule(call)
+
+
+class TestSetScheduleModeErrors:
+    """Tests for error branches in async_handle_set_schedule_mode."""
+
+    async def test_set_schedule_mode_exception(self, hass, setup_domain_data):
+        """async_set_schedule_mode raises Exception -> HomeAssistantError (lines 149-150)."""
+        coordinator = setup_domain_data
+        coordinator.async_set_schedule_mode = AsyncMock(
+            side_effect=RuntimeError("fail")
+        )
+
+        call = MagicMock()
+        call.hass = hass
+        call.data = {
+            ATTR_CONFIG_ENTRY_ID: "test_entry_id",
+            ATTR_SUBENTRY_ID: "test_subentry_id",
+            ATTR_ENABLED: True,
+            ATTR_PREHEAT: False,
+        }
+
+        with pytest.raises(HomeAssistantError, match="Failed to set schedule mode"):
+            await async_handle_set_schedule_mode(call)
