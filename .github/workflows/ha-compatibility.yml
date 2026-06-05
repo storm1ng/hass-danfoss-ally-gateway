@@ -38,9 +38,9 @@ jobs:
           pip install -r requirements_test.txt
           if [ -n "${{ matrix.homeassistant-version }}" ]; then
             pip install \
-              homeassistant==${{ matrix.homeassistant-version }} \
-              pytest-homeassistant-custom-component==${{ matrix.test-helper-version }} \
-              ${{ matrix.extra-pins }}
+              "homeassistant==${{ matrix.homeassistant-version }}" \
+              "pytest-homeassistant-custom-component==${{ matrix.test-helper-version }}" \
+              "${{ matrix.extra-pins }}"
           else
             pip install homeassistant
           fi
