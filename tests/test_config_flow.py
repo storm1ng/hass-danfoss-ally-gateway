@@ -398,6 +398,102 @@ class TestExtractRoomData:
         )
         assert result[CONF_TRV_ENTITIES] == trvs
 
+    def test_empty_string_at_home_temp_uses_default(self):
+        """Empty string for at_home_temp should use default value."""
+        result = _extract_room_data(
+            {
+                CONF_ROOM_NAME: "Kitchen",
+                CONF_TRV_ENTITIES: ["trv_1"],
+                CONF_AT_HOME_TEMP: "",  # Empty string from form
+            }
+        )
+        assert result[CONF_AT_HOME_TEMP] == DEFAULT_AT_HOME_TEMP
+
+    def test_empty_string_away_temp_uses_default(self):
+        """Empty string for away_temp should use default value."""
+        result = _extract_room_data(
+            {
+                CONF_ROOM_NAME: "Kitchen",
+                CONF_TRV_ENTITIES: ["trv_1"],
+                CONF_AWAY_TEMP: "",  # Empty string from form
+            }
+        )
+        assert result[CONF_AWAY_TEMP] == DEFAULT_AWAY_TEMP
+
+    def test_both_empty_string_temps_use_defaults(self):
+        """Both temperature fields empty should use defaults."""
+        result = _extract_room_data(
+            {
+                CONF_ROOM_NAME: "Kitchen",
+                CONF_TRV_ENTITIES: ["trv_1"],
+                CONF_AT_HOME_TEMP: "",
+                CONF_AWAY_TEMP: "",
+            }
+        )
+        assert result[CONF_AT_HOME_TEMP] == DEFAULT_AT_HOME_TEMP
+        assert result[CONF_AWAY_TEMP] == DEFAULT_AWAY_TEMP
+
+    def test_none_at_home_temp_uses_default(self):
+        """None for at_home_temp should use default value."""
+        result = _extract_room_data(
+            {
+                CONF_ROOM_NAME: "Kitchen",
+                CONF_TRV_ENTITIES: ["trv_1"],
+                CONF_AT_HOME_TEMP: None,
+            }
+        )
+        assert result[CONF_AT_HOME_TEMP] == DEFAULT_AT_HOME_TEMP
+
+    def test_none_away_temp_uses_default(self):
+        """None for away_temp should use default value."""
+        result = _extract_room_data(
+            {
+                CONF_ROOM_NAME: "Kitchen",
+                CONF_TRV_ENTITIES: ["trv_1"],
+                CONF_AWAY_TEMP: None,
+            }
+        )
+        assert result[CONF_AWAY_TEMP] == DEFAULT_AWAY_TEMP
+
+    def test_valid_numeric_temps_preserved(self):
+        """Valid numeric temperature values should be preserved."""
+        result = _extract_room_data(
+            {
+                CONF_ROOM_NAME: "Kitchen",
+                CONF_TRV_ENTITIES: ["trv_1"],
+                CONF_AT_HOME_TEMP: 22.5,
+                CONF_AWAY_TEMP: 18.0,
+            }
+        )
+        assert result[CONF_AT_HOME_TEMP] == 22.5
+        assert result[CONF_AWAY_TEMP] == 18.0
+
+    def test_edge_case_zero_temp_preserved(self):
+        """Zero temperature should be preserved (even though UI prevents it)."""
+        result = _extract_room_data(
+            {
+                CONF_ROOM_NAME: "Kitchen",
+                CONF_TRV_ENTITIES: ["trv_1"],
+                CONF_AT_HOME_TEMP: 0.0,
+                CONF_AWAY_TEMP: 0.0,
+            }
+        )
+        assert result[CONF_AT_HOME_TEMP] == 0.0
+        assert result[CONF_AWAY_TEMP] == 0.0
+
+    def test_mixed_empty_and_valid_temps(self):
+        """One empty, one valid temperature field."""
+        result = _extract_room_data(
+            {
+                CONF_ROOM_NAME: "Kitchen",
+                CONF_TRV_ENTITIES: ["trv_1"],
+                CONF_AT_HOME_TEMP: "",
+                CONF_AWAY_TEMP: 19.5,
+            }
+        )
+        assert result[CONF_AT_HOME_TEMP] == DEFAULT_AT_HOME_TEMP
+        assert result[CONF_AWAY_TEMP] == 19.5
+
 
 # ── async_get_supported_subentry_types Tests ──────────────────────────
 
