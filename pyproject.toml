@@ -8,7 +8,6 @@ requires-python = ">=3.13"
 testpaths = ["tests"]
 asyncio_mode = "auto"
 pythonpath = ["."]
-addopts = "--cov --cov-report=term-missing"
 
 [tool.coverage.run]
 source = ["custom_components/danfoss_ally_gateway"]

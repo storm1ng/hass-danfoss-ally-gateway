@@ -10,6 +10,7 @@ from conftest import make_subentry_data, make_trv_state
 from homeassistant import config_entries
 from homeassistant.const import STATE_ON, STATE_UNAVAILABLE
 from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
 
 from custom_components.danfoss_ally_gateway.backend.z2m import Z2MBackend
 from custom_components.danfoss_ally_gateway.const import (
@@ -928,6 +929,55 @@ class TestDeviceIdResolution:
         assert coord._time_sync._trv_ids == expected
         assert coord._ext_temp._trv_ids == expected
         await coord.async_teardown()
+
+    async def test_zha_resolves_to_climate_entity(
+        self, hass, mock_config_entry, subentry_data
+    ):
+        """ZHA backend resolves device ID to climate entity_id."""
+        from custom_components.danfoss_ally_gateway.backend.zha import ZHABackend
+
+        backend = ZHABackend(hass)
+        coord = RoomCoordinator(hass, backend, subentry_data)
+
+        # Create a mock device registry entry
+        dev_reg = dr.async_get(hass)
+        device = dev_reg.async_get_or_create(
+            config_entry_id=mock_config_entry.entry_id,
+            identifiers={("zha", "00:11:22:33:44:55:66:77")},
+            name="Living Room TRV",
+        )
+
+        # Create a mock entity registry entry
+        entity_reg = er.async_get(hass)
+        entity_reg.async_get_or_create(
+            "climate",
+            "zha",
+            "00:11:22:33:44:55:66:77-1",
+            device_id=device.id,
+        )
+
+        result = coord._resolve_trv_id(device.id)
+        assert result == "climate.zha_00_11_22_33_44_55_66_77_1"
+
+    async def test_zha_no_climate_entity_falls_back(
+        self, hass, mock_config_entry, subentry_data
+    ):
+        """ZHA backend falls back when no climate entity found."""
+        from custom_components.danfoss_ally_gateway.backend.zha import ZHABackend
+
+        backend = ZHABackend(hass)
+        coord = RoomCoordinator(hass, backend, subentry_data)
+
+        dev_reg = dr.async_get(hass)
+        device = dev_reg.async_get_or_create(
+            config_entry_id=mock_config_entry.entry_id,
+            identifiers={("zha", "00:11:22:33:44:55:66:77")},
+            name="Some Device",
+        )
+        # No climate entity created
+
+        result = coord._resolve_trv_id(device.id)
+        assert result == device.id  # Falls back to device ID
 
     async def test_backwards_compat_old_friendly_names(self, hass, mock_backend):
         """Old subentries storing friendly names directly still work."""
