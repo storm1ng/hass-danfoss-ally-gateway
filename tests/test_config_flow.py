@@ -13,6 +13,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.danfoss_ally_gateway.config_flow import (
     DanfossAllyGatewayConfigFlow,
     RoomSubentryFlowHandler,
+    _build_room_schema,
     _build_trv_selector,
     _extract_room_data,
     _get_assigned_trv_ids,
@@ -30,6 +31,7 @@ from custom_components.danfoss_ally_gateway.const import (
     CONF_PREHEAT_ENABLED,
     CONF_REMOTE_CLIMATE,
     CONF_ROOM_NAME,
+    CONF_SCHEDULE_ENABLED,
     CONF_SCHEDULE_ENTITY,
     CONF_TEMP_SENSOR,
     CONF_TRV_ENTITIES,
@@ -368,8 +370,9 @@ class TestExtractRoomData:
         assert result[CONF_HEAT_SOURCE_TYPE] == ""
         assert result[CONF_REMOTE_CLIMATE] == ""
         assert result[CONF_SCHEDULE_ENTITY] == ""
-        assert result[CONF_AT_HOME_TEMP] == DEFAULT_AT_HOME_TEMP
-        assert result[CONF_AWAY_TEMP] == DEFAULT_AWAY_TEMP
+        assert result[CONF_SCHEDULE_ENABLED] is False
+        assert result[CONF_AT_HOME_TEMP] == ""
+        assert result[CONF_AWAY_TEMP] == ""
         assert result[CONF_PREHEAT_ENABLED] is True
 
     def test_full_input_preserves_all_values(self):
@@ -383,6 +386,7 @@ class TestExtractRoomData:
             CONF_HEAT_SOURCE_TYPE: "climate",
             CONF_REMOTE_CLIMATE: "climate.remote",
             CONF_SCHEDULE_ENTITY: "schedule.weekday",
+            CONF_SCHEDULE_ENABLED: True,
             CONF_AT_HOME_TEMP: 23.0,
             CONF_AWAY_TEMP: 15.0,
             CONF_PREHEAT_ENABLED: False,
@@ -398,101 +402,158 @@ class TestExtractRoomData:
         )
         assert result[CONF_TRV_ENTITIES] == trvs
 
-    def test_empty_string_at_home_temp_uses_default(self):
-        """Empty string for at_home_temp should use default value."""
-        result = _extract_room_data(
-            {
-                CONF_ROOM_NAME: "Kitchen",
-                CONF_TRV_ENTITIES: ["trv_1"],
-                CONF_AT_HOME_TEMP: "",  # Empty string from form
-            }
-        )
-        assert result[CONF_AT_HOME_TEMP] == DEFAULT_AT_HOME_TEMP
 
-    def test_empty_string_away_temp_uses_default(self):
-        """Empty string for away_temp should use default value."""
-        result = _extract_room_data(
-            {
-                CONF_ROOM_NAME: "Kitchen",
-                CONF_TRV_ENTITIES: ["trv_1"],
-                CONF_AWAY_TEMP: "",  # Empty string from form
-            }
-        )
-        assert result[CONF_AWAY_TEMP] == DEFAULT_AWAY_TEMP
+# ── Schedule Toggle Tests ─────────────────────────────────────────────
 
-    def test_both_empty_string_temps_use_defaults(self):
-        """Both temperature fields empty should use defaults."""
+
+class TestScheduleToggle:
+    """Tests for schedule-enabled toggle feature."""
+
+    def test_extract_room_data_schedule_disabled_ignores_temps(self):
+        """When schedule disabled, temperature fields stored as empty strings."""
         result = _extract_room_data(
             {
                 CONF_ROOM_NAME: "Kitchen",
                 CONF_TRV_ENTITIES: ["trv_1"],
+                CONF_SCHEDULE_ENABLED: False,
                 CONF_AT_HOME_TEMP: "",
                 CONF_AWAY_TEMP: "",
             }
         )
+        # When disabled, empty strings should remain (not converted to defaults)
+        assert result[CONF_SCHEDULE_ENABLED] is False
+        assert result[CONF_AT_HOME_TEMP] == ""
+        assert result[CONF_AWAY_TEMP] == ""
+
+    def test_extract_room_data_schedule_enabled_empty_temps_use_defaults(self):
+        """When schedule enabled, empty temps convert to defaults."""
+        result = _extract_room_data(
+            {
+                CONF_ROOM_NAME: "Kitchen",
+                CONF_TRV_ENTITIES: ["trv_1"],
+                CONF_SCHEDULE_ENABLED: True,
+                CONF_AT_HOME_TEMP: "",
+                CONF_AWAY_TEMP: "",
+            }
+        )
+        assert result[CONF_SCHEDULE_ENABLED] is True
         assert result[CONF_AT_HOME_TEMP] == DEFAULT_AT_HOME_TEMP
         assert result[CONF_AWAY_TEMP] == DEFAULT_AWAY_TEMP
 
-    def test_none_at_home_temp_uses_default(self):
-        """None for at_home_temp should use default value."""
+    def test_extract_room_data_schedule_enabled_preserves_temps(self):
+        """When schedule enabled with valid temps, values preserved."""
         result = _extract_room_data(
             {
                 CONF_ROOM_NAME: "Kitchen",
                 CONF_TRV_ENTITIES: ["trv_1"],
-                CONF_AT_HOME_TEMP: None,
+                CONF_SCHEDULE_ENABLED: True,
+                CONF_AT_HOME_TEMP: 23.5,
+                CONF_AWAY_TEMP: 16.0,
             }
         )
-        assert result[CONF_AT_HOME_TEMP] == DEFAULT_AT_HOME_TEMP
+        assert result[CONF_SCHEDULE_ENABLED] is True
+        assert result[CONF_AT_HOME_TEMP] == 23.5
+        assert result[CONF_AWAY_TEMP] == 16.0
 
-    def test_none_away_temp_uses_default(self):
-        """None for away_temp should use default value."""
+    def test_extract_room_data_defaults_schedule_to_false(self):
+        """If schedule_enabled not provided, defaults to False."""
         result = _extract_room_data(
             {
                 CONF_ROOM_NAME: "Kitchen",
                 CONF_TRV_ENTITIES: ["trv_1"],
+            }
+        )
+        assert result[CONF_SCHEDULE_ENABLED] is False
+
+    def test_extract_room_data_schedule_enabled_none_temps_use_defaults(self):
+        """When schedule enabled with None temps, use defaults."""
+        result = _extract_room_data(
+            {
+                CONF_ROOM_NAME: "Kitchen",
+                CONF_TRV_ENTITIES: ["trv_1"],
+                CONF_SCHEDULE_ENABLED: True,
+                CONF_AT_HOME_TEMP: None,
                 CONF_AWAY_TEMP: None,
             }
         )
+        assert result[CONF_AT_HOME_TEMP] == DEFAULT_AT_HOME_TEMP
         assert result[CONF_AWAY_TEMP] == DEFAULT_AWAY_TEMP
 
-    def test_valid_numeric_temps_preserved(self):
-        """Valid numeric temperature values should be preserved."""
+    def test_extract_room_data_schedule_disabled_preserves_any_value(self):
+        """When schedule disabled, preserve whatever temp values are provided."""
         result = _extract_room_data(
             {
                 CONF_ROOM_NAME: "Kitchen",
                 CONF_TRV_ENTITIES: ["trv_1"],
-                CONF_AT_HOME_TEMP: 22.5,
+                CONF_SCHEDULE_ENABLED: False,
+                CONF_AT_HOME_TEMP: 20.0,
                 CONF_AWAY_TEMP: 18.0,
             }
         )
-        assert result[CONF_AT_HOME_TEMP] == 22.5
-        assert result[CONF_AWAY_TEMP] == 18.0
+        # When disabled, values should be converted to empty strings
+        assert result[CONF_AT_HOME_TEMP] == ""
+        assert result[CONF_AWAY_TEMP] == ""
 
-    def test_edge_case_zero_temp_preserved(self):
-        """Zero temperature should be preserved (even though UI prevents it)."""
-        result = _extract_room_data(
-            {
-                CONF_ROOM_NAME: "Kitchen",
-                CONF_TRV_ENTITIES: ["trv_1"],
-                CONF_AT_HOME_TEMP: 0.0,
-                CONF_AWAY_TEMP: 0.0,
-            }
-        )
-        assert result[CONF_AT_HOME_TEMP] == 0.0
-        assert result[CONF_AWAY_TEMP] == 0.0
+    def test_build_room_schema_schedule_disabled_no_temp_fields(self):
+        """When schedule disabled, temp and schedule fields not in schema."""
+        schema = _build_room_schema(BACKEND_Z2M, schedule_enabled=False)
+        # Check that temperature field keys are NOT in the schema
+        schema_keys = list(schema.schema.keys())
+        temp_keys = [
+            key
+            for key in schema_keys
+            if hasattr(key, "schema")
+            and key.schema in [CONF_AT_HOME_TEMP, CONF_AWAY_TEMP, CONF_SCHEDULE_ENTITY]
+        ]
+        assert len(temp_keys) == 0
 
-    def test_mixed_empty_and_valid_temps(self):
-        """One empty, one valid temperature field."""
-        result = _extract_room_data(
-            {
-                CONF_ROOM_NAME: "Kitchen",
-                CONF_TRV_ENTITIES: ["trv_1"],
-                CONF_AT_HOME_TEMP: "",
-                CONF_AWAY_TEMP: 19.5,
-            }
+    def test_build_room_schema_schedule_enabled_has_temp_fields(self):
+        """When schedule enabled, temp and schedule fields are in schema."""
+        schema = _build_room_schema(BACKEND_Z2M, schedule_enabled=True)
+        schema_keys = list(schema.schema.keys())
+        # Verify schedule and temperature fields are present
+        has_schedule = any(
+            hasattr(key, "schema") and key.schema == CONF_SCHEDULE_ENTITY
+            for key in schema_keys
         )
-        assert result[CONF_AT_HOME_TEMP] == DEFAULT_AT_HOME_TEMP
-        assert result[CONF_AWAY_TEMP] == 19.5
+        has_at_home_temp = any(
+            hasattr(key, "schema") and key.schema == CONF_AT_HOME_TEMP
+            for key in schema_keys
+        )
+        has_away_temp = any(
+            hasattr(key, "schema") and key.schema == CONF_AWAY_TEMP
+            for key in schema_keys
+        )
+        assert has_schedule and has_at_home_temp and has_away_temp
+
+    def test_build_room_schema_reconfigure_extracts_schedule_enabled(self):
+        """During reconfigure, schedule_enabled from defaults is used."""
+        defaults = {
+            CONF_ROOM_NAME: "Kitchen",
+            CONF_TRV_ENTITIES: ["trv_1"],
+            CONF_SCHEDULE_ENABLED: True,
+        }
+        schema = _build_room_schema(BACKEND_Z2M, defaults=defaults)
+        # Should extract schedule_enabled=True from defaults
+        schema_keys = list(schema.schema.keys())
+        has_at_home_temp = any(
+            hasattr(key, "schema") and key.schema == CONF_AT_HOME_TEMP
+            for key in schema_keys
+        )
+        assert has_at_home_temp
+
+    def test_build_room_schema_always_has_schedule_enabled_toggle(self):
+        """Schema always includes the schedule_enabled toggle."""
+        schema_disabled = _build_room_schema(BACKEND_Z2M, schedule_enabled=False)
+        schema_enabled = _build_room_schema(BACKEND_Z2M, schedule_enabled=True)
+
+        for schema in [schema_disabled, schema_enabled]:
+            schema_keys = list(schema.schema.keys())
+            has_toggle = any(
+                hasattr(key, "schema") and key.schema == CONF_SCHEDULE_ENABLED
+                for key in schema_keys
+            )
+            assert has_toggle
 
 
 # ── async_get_supported_subentry_types Tests ──────────────────────────

@@ -33,6 +33,7 @@ from .const import (
     CONF_PREHEAT_ENABLED,
     CONF_REMOTE_CLIMATE,
     CONF_ROOM_NAME,
+    CONF_SCHEDULE_ENABLED,
     CONF_SCHEDULE_ENTITY,
     CONF_TEMP_SENSOR,
     CONF_TRV_ENTITIES,
@@ -272,14 +273,22 @@ class DanfossAllyGatewayConfigFlow(ConfigFlow, domain=DOMAIN):
 
 def _extract_room_data(user_input: dict[str, Any]) -> dict[str, Any]:
     """Extract room configuration data from user input."""
-    # Handle empty strings from number fields - use defaults only for empty/missing values
+    schedule_enabled = user_input.get(CONF_SCHEDULE_ENABLED, False)
+
+    # Handle empty strings from number fields - use defaults only when schedule enabled
     at_home_temp = user_input.get(CONF_AT_HOME_TEMP)
-    if at_home_temp is None or at_home_temp == "":
+    if (at_home_temp is None or at_home_temp == "") and schedule_enabled:
         at_home_temp = DEFAULT_AT_HOME_TEMP
+    elif not schedule_enabled:
+        # When schedule disabled, store empty string to avoid validation issues
+        at_home_temp = ""
 
     away_temp = user_input.get(CONF_AWAY_TEMP)
-    if away_temp is None or away_temp == "":
+    if (away_temp is None or away_temp == "") and schedule_enabled:
         away_temp = DEFAULT_AWAY_TEMP
+    elif not schedule_enabled:
+        # When schedule disabled, store empty string to avoid validation issues
+        away_temp = ""
 
     return {
         CONF_ROOM_NAME: user_input[CONF_ROOM_NAME],
@@ -290,6 +299,7 @@ def _extract_room_data(user_input: dict[str, Any]) -> dict[str, Any]:
         CONF_HEAT_SOURCE_TYPE: user_input.get(CONF_HEAT_SOURCE_TYPE, ""),
         CONF_REMOTE_CLIMATE: user_input.get(CONF_REMOTE_CLIMATE, ""),
         CONF_SCHEDULE_ENTITY: user_input.get(CONF_SCHEDULE_ENTITY, ""),
+        CONF_SCHEDULE_ENABLED: schedule_enabled,
         CONF_AT_HOME_TEMP: at_home_temp,
         CONF_AWAY_TEMP: away_temp,
         CONF_PREHEAT_ENABLED: user_input.get(CONF_PREHEAT_ENABLED, True),
@@ -299,6 +309,7 @@ def _extract_room_data(user_input: dict[str, Any]) -> dict[str, Any]:
 def _build_room_schema(
     backend: str,
     defaults: dict[str, Any] | None = None,
+    schedule_enabled: bool | None = None,
 ) -> vol.Schema:
     """Build the room configuration schema.
 
@@ -306,10 +317,18 @@ def _build_room_schema(
         backend: The backend type (Z2M or ZHA).
         defaults: Existing room data for pre-populating fields during
             reconfigure. When None, fields use their initial defaults.
+        schedule_enabled: Whether schedule-based temperature control is enabled.
+            If None and defaults exist, will be extracted from defaults.
 
     """
     trv_selector = _build_trv_selector(backend)
     is_reconfigure = defaults is not None
+
+    # Determine schedule_enabled state
+    if schedule_enabled is None and defaults is not None:
+        schedule_enabled = defaults.get(CONF_SCHEDULE_ENABLED, False)
+    if schedule_enabled is None:
+        schedule_enabled = False
 
     def _field(
         key: str,
@@ -333,61 +352,72 @@ def _build_room_schema(
             return cls(key, default=default)
         return cls(key)
 
-    return vol.Schema(
-        {
-            _field(CONF_ROOM_NAME, required=True): selector.TextSelector(),
-            _field(CONF_AREA): selector.AreaSelector(),
-            _field(CONF_TRV_ENTITIES, required=True): trv_selector,
-            _field(CONF_TEMP_SENSOR): selector.EntitySelector(
-                selector.EntitySelectorConfig(
-                    domain="sensor",
-                    device_class=SensorDeviceClass.TEMPERATURE,
-                )
+    # Build base schema
+    schema_dict = {
+        _field(CONF_ROOM_NAME, required=True): selector.TextSelector(),
+        _field(CONF_AREA): selector.AreaSelector(),
+        _field(CONF_TRV_ENTITIES, required=True): trv_selector,
+        _field(CONF_TEMP_SENSOR): selector.EntitySelector(
+            selector.EntitySelectorConfig(
+                domain="sensor",
+                device_class=SensorDeviceClass.TEMPERATURE,
+            )
+        ),
+        _field(CONF_HEAT_SOURCE_TYPE): selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=HEAT_SOURCE_TYPE_OPTIONS,
+                mode=selector.SelectSelectorMode.DROPDOWN,
             ),
-            _field(CONF_HEAT_SOURCE_TYPE): selector.SelectSelector(
-                selector.SelectSelectorConfig(
-                    options=HEAT_SOURCE_TYPE_OPTIONS,
-                    mode=selector.SelectSelectorMode.DROPDOWN,
-                ),
-            ),
-            _field(CONF_HEAT_SOURCE): selector.EntitySelector(
-                selector.EntitySelectorConfig(
-                    domain=["climate", "binary_sensor"],
-                )
-            ),
-            _field(CONF_REMOTE_CLIMATE): selector.EntitySelector(
-                selector.EntitySelectorConfig(
-                    domain="climate",
-                )
-            ),
-            _field(CONF_SCHEDULE_ENTITY): selector.EntitySelector(
+        ),
+        _field(CONF_HEAT_SOURCE): selector.EntitySelector(
+            selector.EntitySelectorConfig(
+                domain=["climate", "binary_sensor"],
+            )
+        ),
+        _field(CONF_REMOTE_CLIMATE): selector.EntitySelector(
+            selector.EntitySelectorConfig(
+                domain="climate",
+            )
+        ),
+        _field(CONF_SCHEDULE_ENABLED, default=False): selector.BooleanSelector(),
+    }
+
+    # Conditionally add schedule and temperature fields when schedule is enabled
+    if schedule_enabled:
+        schema_dict[_field(CONF_SCHEDULE_ENTITY, required=True)] = (
+            selector.EntitySelector(
                 selector.EntitySelectorConfig(
                     domain="schedule",
                 )
-            ),
-            _field(
-                CONF_AT_HOME_TEMP, default=DEFAULT_AT_HOME_TEMP
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(
-                    min=5.0,
-                    max=35.0,
-                    step=0.5,
-                    unit_of_measurement="°C",
-                    mode=selector.NumberSelectorMode.BOX,
-                )
-            ),
-            _field(CONF_AWAY_TEMP, default=DEFAULT_AWAY_TEMP): selector.NumberSelector(
-                selector.NumberSelectorConfig(
-                    min=5.0,
-                    max=35.0,
-                    step=0.5,
-                    unit_of_measurement="°C",
-                    mode=selector.NumberSelectorMode.BOX,
-                )
-            ),
-            _field(CONF_PREHEAT_ENABLED, default=True): selector.BooleanSelector(),
-        }
-    )
+            )
+        )
+        schema_dict[
+            _field(CONF_AT_HOME_TEMP, default=DEFAULT_AT_HOME_TEMP, required=True)
+        ] = selector.NumberSelector(
+            selector.NumberSelectorConfig(
+                min=5.0,
+                max=35.0,
+                step=0.5,
+                unit_of_measurement="°C",
+                mode=selector.NumberSelectorMode.BOX,
+            )
+        )
+        schema_dict[
+            _field(CONF_AWAY_TEMP, default=DEFAULT_AWAY_TEMP, required=True)
+        ] = selector.NumberSelector(
+            selector.NumberSelectorConfig(
+                min=5.0,
+                max=35.0,
+                step=0.5,
+                unit_of_measurement="°C",
+                mode=selector.NumberSelectorMode.BOX,
+            )
+        )
+
+    # Always include preheat_enabled
+    schema_dict[_field(CONF_PREHEAT_ENABLED, default=True)] = selector.BooleanSelector()
+
+    return vol.Schema(schema_dict)
 
 
 class RoomSubentryFlowHandler(ConfigSubentryFlow):
@@ -401,11 +431,14 @@ class RoomSubentryFlowHandler(ConfigSubentryFlow):
 
         if user_input is not None:
             trv_entities = user_input[CONF_TRV_ENTITIES]
+            schedule_enabled = user_input.get(CONF_SCHEDULE_ENABLED, False)
 
             if not trv_entities:
                 errors[CONF_TRV_ENTITIES] = "no_trvs_selected"
             elif set(trv_entities) & _get_assigned_trv_ids(self._get_entry()):
                 errors[CONF_TRV_ENTITIES] = "trv_already_assigned"
+            elif schedule_enabled and not user_input.get(CONF_SCHEDULE_ENTITY):
+                errors[CONF_SCHEDULE_ENTITY] = "schedule_required_when_enabled"
             else:
                 data = _extract_room_data(user_input)
                 return self.async_create_entry(
@@ -434,6 +467,7 @@ class RoomSubentryFlowHandler(ConfigSubentryFlow):
 
         if user_input is not None:
             trv_entities = user_input[CONF_TRV_ENTITIES]
+            schedule_enabled = user_input.get(CONF_SCHEDULE_ENABLED, False)
 
             if not trv_entities:
                 errors[CONF_TRV_ENTITIES] = "no_trvs_selected"
@@ -441,6 +475,8 @@ class RoomSubentryFlowHandler(ConfigSubentryFlow):
                 config_entry, subentry.subentry_id
             ):
                 errors[CONF_TRV_ENTITIES] = "trv_already_assigned"
+            elif schedule_enabled and not user_input.get(CONF_SCHEDULE_ENTITY):
+                errors[CONF_SCHEDULE_ENTITY] = "schedule_required_when_enabled"
             else:
                 data = _extract_room_data(user_input)
                 return self.async_update_and_abort(
@@ -454,6 +490,10 @@ class RoomSubentryFlowHandler(ConfigSubentryFlow):
 
         return self.async_show_form(
             step_id="reconfigure",
-            data_schema=_build_room_schema(backend, defaults=dict(existing)),
+            data_schema=_build_room_schema(
+                backend,
+                defaults=dict(existing),
+                schedule_enabled=existing.get(CONF_SCHEDULE_ENABLED, False),
+            ),
             errors=errors,
         )
