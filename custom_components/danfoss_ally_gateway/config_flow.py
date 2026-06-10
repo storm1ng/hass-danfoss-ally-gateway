@@ -271,7 +271,22 @@ class DanfossAllyGatewayConfigFlow(ConfigFlow, domain=DOMAIN):
 
 
 def _extract_room_data(user_input: dict[str, Any]) -> dict[str, Any]:
-    """Extract room configuration data from user input."""
+    """Extract room configuration data from user input.
+
+    Temperature values are always validated and stored with defaults.
+    The coordinator will only use them when a schedule entity is configured.
+    """
+    schedule_entity = user_input.get(CONF_SCHEDULE_ENTITY, "")
+
+    # Always process and validate temperature values
+    at_home_temp = user_input.get(CONF_AT_HOME_TEMP)
+    if at_home_temp is None or at_home_temp == "":
+        at_home_temp = DEFAULT_AT_HOME_TEMP
+
+    away_temp = user_input.get(CONF_AWAY_TEMP)
+    if away_temp is None or away_temp == "":
+        away_temp = DEFAULT_AWAY_TEMP
+
     return {
         CONF_ROOM_NAME: user_input[CONF_ROOM_NAME],
         CONF_AREA: user_input.get(CONF_AREA, ""),
@@ -280,9 +295,9 @@ def _extract_room_data(user_input: dict[str, Any]) -> dict[str, Any]:
         CONF_HEAT_SOURCE: user_input.get(CONF_HEAT_SOURCE, ""),
         CONF_HEAT_SOURCE_TYPE: user_input.get(CONF_HEAT_SOURCE_TYPE, ""),
         CONF_REMOTE_CLIMATE: user_input.get(CONF_REMOTE_CLIMATE, ""),
-        CONF_SCHEDULE_ENTITY: user_input.get(CONF_SCHEDULE_ENTITY, ""),
-        CONF_AT_HOME_TEMP: user_input.get(CONF_AT_HOME_TEMP, DEFAULT_AT_HOME_TEMP),
-        CONF_AWAY_TEMP: user_input.get(CONF_AWAY_TEMP, DEFAULT_AWAY_TEMP),
+        CONF_SCHEDULE_ENTITY: schedule_entity,
+        CONF_AT_HOME_TEMP: at_home_temp,
+        CONF_AWAY_TEMP: away_temp,
         CONF_PREHEAT_ENABLED: user_input.get(CONF_PREHEAT_ENABLED, True),
     }
 

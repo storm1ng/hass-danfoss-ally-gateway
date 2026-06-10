@@ -368,6 +368,7 @@ class TestExtractRoomData:
         assert result[CONF_HEAT_SOURCE_TYPE] == ""
         assert result[CONF_REMOTE_CLIMATE] == ""
         assert result[CONF_SCHEDULE_ENTITY] == ""
+        # Temps always stored with defaults
         assert result[CONF_AT_HOME_TEMP] == DEFAULT_AT_HOME_TEMP
         assert result[CONF_AWAY_TEMP] == DEFAULT_AWAY_TEMP
         assert result[CONF_PREHEAT_ENABLED] is True
@@ -397,6 +398,116 @@ class TestExtractRoomData:
             {CONF_ROOM_NAME: "Bedroom", CONF_TRV_ENTITIES: trvs}
         )
         assert result[CONF_TRV_ENTITIES] == trvs
+
+
+# ── Implicit Schedule Mode Tests ──────────────────────────────────────
+
+
+class TestImplicitScheduleMode:
+    """Tests for implicit schedule mode based on schedule entity selection."""
+
+    def test_no_schedule_temps_use_defaults(self):
+        """When no schedule selected, temperatures still stored with defaults."""
+        result = _extract_room_data(
+            {
+                CONF_ROOM_NAME: "Kitchen",
+                CONF_TRV_ENTITIES: ["trv_1"],
+                CONF_SCHEDULE_ENTITY: "",
+            }
+        )
+        assert result[CONF_SCHEDULE_ENTITY] == ""
+        # Temps always get defaults
+        assert result[CONF_AT_HOME_TEMP] == DEFAULT_AT_HOME_TEMP
+        assert result[CONF_AWAY_TEMP] == DEFAULT_AWAY_TEMP
+
+    def test_no_schedule_custom_temps_preserved(self):
+        """When no schedule but user filled temps, preserve them."""
+        result = _extract_room_data(
+            {
+                CONF_ROOM_NAME: "Kitchen",
+                CONF_TRV_ENTITIES: ["trv_1"],
+                CONF_SCHEDULE_ENTITY: "",
+                CONF_AT_HOME_TEMP: 22.0,
+                CONF_AWAY_TEMP: 18.0,
+            }
+        )
+        assert result[CONF_SCHEDULE_ENTITY] == ""
+        # User's values preserved
+        assert result[CONF_AT_HOME_TEMP] == 22.0
+        assert result[CONF_AWAY_TEMP] == 18.0
+
+    def test_schedule_selected_empty_temps_use_defaults(self):
+        """When schedule selected with empty temps, use defaults."""
+        result = _extract_room_data(
+            {
+                CONF_ROOM_NAME: "Kitchen",
+                CONF_TRV_ENTITIES: ["trv_1"],
+                CONF_SCHEDULE_ENTITY: "schedule.weekday",
+                CONF_AT_HOME_TEMP: "",
+                CONF_AWAY_TEMP: "",
+            }
+        )
+        assert result[CONF_SCHEDULE_ENTITY] == "schedule.weekday"
+        assert result[CONF_AT_HOME_TEMP] == DEFAULT_AT_HOME_TEMP
+        assert result[CONF_AWAY_TEMP] == DEFAULT_AWAY_TEMP
+
+    def test_schedule_selected_none_temps_use_defaults(self):
+        """When schedule selected with None temps, use defaults."""
+        result = _extract_room_data(
+            {
+                CONF_ROOM_NAME: "Kitchen",
+                CONF_TRV_ENTITIES: ["trv_1"],
+                CONF_SCHEDULE_ENTITY: "schedule.weekday",
+                CONF_AT_HOME_TEMP: None,
+                CONF_AWAY_TEMP: None,
+            }
+        )
+        assert result[CONF_AT_HOME_TEMP] == DEFAULT_AT_HOME_TEMP
+        assert result[CONF_AWAY_TEMP] == DEFAULT_AWAY_TEMP
+
+    def test_schedule_selected_valid_temps_preserved(self):
+        """When schedule selected with valid temps, preserve values."""
+        result = _extract_room_data(
+            {
+                CONF_ROOM_NAME: "Kitchen",
+                CONF_TRV_ENTITIES: ["trv_1"],
+                CONF_SCHEDULE_ENTITY: "schedule.weekday",
+                CONF_AT_HOME_TEMP: 23.5,
+                CONF_AWAY_TEMP: 16.0,
+            }
+        )
+        assert result[CONF_SCHEDULE_ENTITY] == "schedule.weekday"
+        assert result[CONF_AT_HOME_TEMP] == 23.5
+        assert result[CONF_AWAY_TEMP] == 16.0
+
+    def test_deselecting_schedule_preserves_temps(self):
+        """When user deselects schedule, temperature values are preserved."""
+        # First: had schedule with temps
+        initial = _extract_room_data(
+            {
+                CONF_ROOM_NAME: "Kitchen",
+                CONF_TRV_ENTITIES: ["trv_1"],
+                CONF_SCHEDULE_ENTITY: "schedule.weekday",
+                CONF_AT_HOME_TEMP: 23.0,
+                CONF_AWAY_TEMP: 16.0,
+            }
+        )
+        assert initial[CONF_AT_HOME_TEMP] == 23.0
+
+        # Now: user clears schedule but temps remain
+        updated = _extract_room_data(
+            {
+                CONF_ROOM_NAME: "Kitchen",
+                CONF_TRV_ENTITIES: ["trv_1"],
+                CONF_SCHEDULE_ENTITY: "",  # Deselected
+                CONF_AT_HOME_TEMP: 23.0,  # Still in form
+                CONF_AWAY_TEMP: 16.0,  # Still in form
+            }
+        )
+        assert updated[CONF_SCHEDULE_ENTITY] == ""
+        # Temps preserved for future use
+        assert updated[CONF_AT_HOME_TEMP] == 23.0
+        assert updated[CONF_AWAY_TEMP] == 16.0
 
 
 # ── async_get_supported_subentry_types Tests ──────────────────────────
