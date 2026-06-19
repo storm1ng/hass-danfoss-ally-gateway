@@ -13,6 +13,7 @@ from homeassistant.helpers import device_registry as dr
 
 from custom_components.danfoss_ally_gateway.backend.z2m import Z2MBackend
 from custom_components.danfoss_ally_gateway.const import (
+    CONF_TRV_ENTITIES,
     LOAD_BALANCE_DISABLED_VALUE,
     SCHEDULE_MODE_MANUAL,
     SCHEDULE_MODE_SCHEDULE,
@@ -938,6 +939,48 @@ class TestDeviceIdResolution:
         assert coord.trv_ids == ["Living Room TRV", "Kitchen TRV"]
         assert "Living Room TRV" in mock_backend._subscribed_trvs
         assert "Kitchen TRV" in mock_backend._subscribed_trvs
+        await coord.async_teardown()
+
+    async def test_setup_does_not_mutate_original_data(self, hass, mock_config_entry):
+        """Coordinator setup should not mutate the original subentry data dict."""
+        device_reg = dr.async_get(hass)
+
+        # Create devices with registry IDs
+        dev1 = device_reg.async_get_or_create(
+            config_entry_id=mock_config_entry.entry_id,
+            identifiers={("mqtt", "zigbee2mqtt_0x001")},
+            name="Living Room TRV",
+            manufacturer="Danfoss",
+            model="Ally thermostat",
+        )
+        dev2 = device_reg.async_get_or_create(
+            config_entry_id=mock_config_entry.entry_id,
+            identifiers={("mqtt", "zigbee2mqtt_0x002")},
+            name="Kitchen TRV",
+            manufacturer="Danfoss",
+            model="Ally thermostat",
+        )
+
+        # Create subentry data with device registry IDs
+        original_trv_ids = [dev1.id, dev2.id]
+        data = make_subentry_data(trv_ids=original_trv_ids.copy())
+
+        # Create coordinator and setup (which resolves IDs to friendly names)
+        z2m_backend = MagicMock(spec=Z2MBackend)
+        z2m_backend.register_state_callback = MagicMock(return_value=lambda: None)
+        z2m_backend.async_subscribe_trv = AsyncMock()
+
+        coord = RoomCoordinator(hass, z2m_backend, data)
+        await coord.async_setup()
+
+        # Verify the original data dict still has device registry IDs
+        assert data[CONF_TRV_ENTITIES] == original_trv_ids
+        assert data[CONF_TRV_ENTITIES][0] == dev1.id
+        assert data[CONF_TRV_ENTITIES][1] == dev2.id
+
+        # Verify coordinator has resolved friendly names
+        assert coord.trv_ids == ["Living Room TRV", "Kitchen TRV"]
+
         await coord.async_teardown()
 
 
