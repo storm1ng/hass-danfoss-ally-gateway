@@ -112,7 +112,7 @@ class RoomCoordinator:
 
         # Room configuration from subentry
         self._room_name: str = subentry_data[CONF_ROOM_NAME]
-        self._trv_ids: list[str] = subentry_data[CONF_TRV_ENTITIES]
+        self._trv_ids: list[str] = list(subentry_data[CONF_TRV_ENTITIES])
         self._temp_sensor_id: str = subentry_data.get(CONF_TEMP_SENSOR, "")
         self._heat_source_id: str = subentry_data.get(CONF_HEAT_SOURCE, "")
         self._heat_source_type: str = subentry_data.get(CONF_HEAT_SOURCE_TYPE, "")

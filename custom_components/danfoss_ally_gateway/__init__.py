@@ -7,6 +7,7 @@ locally in Home Assistant for TRVs paired to ZHA or Zigbee2MQTT.
 from __future__ import annotations
 
 import logging
+from copy import deepcopy
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry, ConfigSubentry
@@ -84,7 +85,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Set up coordinators for existing room subentries
     for subentry_id, subentry in entry.subentries.items():
         if subentry.subentry_type == SUBENTRY_ROOM:
-            coordinator = RoomCoordinator(hass, backend, dict(subentry.data))
+            coordinator = RoomCoordinator(hass, backend, deepcopy(dict(subentry.data)))
             entry_data["coordinators"][subentry_id] = coordinator
             await coordinator.async_setup()
 
@@ -145,7 +146,7 @@ async def async_setup_subentry(
         return False
 
     backend: DanfossBackend = entry_data["backend"]
-    coordinator = RoomCoordinator(hass, backend, dict(subentry.data))
+    coordinator = RoomCoordinator(hass, backend, deepcopy(dict(subentry.data)))
     entry_data["coordinators"][subentry.subentry_id] = coordinator
     await coordinator.async_setup()
 
