@@ -30,6 +30,7 @@ from homeassistant.core import (
     split_entity_id,
 )
 from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.event import (
     async_call_later,
     async_track_state_change_event,
@@ -37,6 +38,7 @@ from homeassistant.helpers.event import (
 
 from ..backend import DanfossBackend, TRVState
 from ..backend.z2m import Z2MBackend
+from ..backend.zha import ZHABackend
 from ..const import (
     CONF_AT_HOME_TEMP,
     CONF_AWAY_TEMP,
@@ -213,6 +215,14 @@ class RoomCoordinator:
 
         if isinstance(self._backend, Z2MBackend):
             return device.name or trv_id
+
+        if isinstance(self._backend, ZHABackend):
+            # ZHA: find the climate entity for this device
+            entity_reg = er.async_get(self.hass)
+            entries = er.async_entries_for_device(entity_reg, device.id)
+            for entry in entries:
+                if entry.domain == "climate":
+                    return entry.entity_id
 
         _LOGGER.warning(
             "No climate entity found for device %s, using device ID as-is",
