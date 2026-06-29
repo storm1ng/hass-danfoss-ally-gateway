@@ -533,6 +533,44 @@ class TestAsyncGetSupportedSubentryTypes:
         assert set(result.keys()) == {SUBENTRY_ROOM}
 
 
+class TestRoomSubentryReconfigure:
+    """Tests for the room subentry reconfigure flow."""
+
+    async def test_reconfigure_prefills_trv_selector(self, hass: HomeAssistant):
+        _setup_mock_mqtt(hass)
+
+        entry = MockConfigEntry(
+            domain=DOMAIN,
+            data={CONF_BACKEND: BACKEND_Z2M, CONF_MQTT_BASE_TOPIC: "zigbee2mqtt"},
+            title="Danfoss Ally Gateway (Z2M: zigbee2mqtt)",
+            subentries_data=(
+                {
+                    "subentry_id": "room_1",
+                    "subentry_type": SUBENTRY_ROOM,
+                    "title": "Bedroom",
+                    "data": {
+                        CONF_ROOM_NAME: "Bedroom",
+                        CONF_TRV_ENTITIES: ["device-uuid-123"],
+                    },
+                },
+            ),
+        )
+        entry.add_to_hass(hass)
+
+        result = await entry.start_subentry_reconfigure_flow(hass, "room_1")
+
+        assert result["type"] == FlowResultType.FORM  # type: ignore[typeddict-item]
+        assert result["step_id"] == "reconfigure"  # type: ignore[typeddict-item]
+
+        schema = result["data_schema"]
+        step_key = next(
+            key
+            for key in schema.schema
+            if getattr(key, "schema", None) == CONF_TRV_ENTITIES
+        )
+        assert step_key.description["suggested_value"] == ["device-uuid-123"]
+
+
 # ── Invalid backend guard Tests ───────────────────────────────────────
 
 
