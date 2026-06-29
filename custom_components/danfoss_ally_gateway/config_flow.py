@@ -414,9 +414,13 @@ class RoomSubentryFlowHandler(ConfigSubentryFlow):
         config_entry = self._get_entry()
         backend = config_entry.data.get(CONF_BACKEND, BACKEND_Z2M)
 
+        data_schema = _build_room_schema(backend)
+        if user_input is not None:
+            data_schema = self.add_suggested_values_to_schema(data_schema, user_input)
+
         return self.async_show_form(
             step_id="user",
-            data_schema=_build_room_schema(backend),
+            data_schema=data_schema,
             errors=errors,
         )
 
@@ -451,10 +455,9 @@ class RoomSubentryFlowHandler(ConfigSubentryFlow):
         backend = config_entry.data.get(CONF_BACKEND, BACKEND_Z2M)
 
         data_schema = _build_room_schema(backend)
-        if user_input is None:
-            data_schema = self.add_suggested_values_to_schema(
-                data_schema, dict(existing)
-            )
+        data_schema = self.add_suggested_values_to_schema(
+            data_schema, user_input if user_input is not None else dict(existing)
+        )
 
         return self.async_show_form(
             step_id="reconfigure",

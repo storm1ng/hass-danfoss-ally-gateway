@@ -595,3 +595,229 @@ class TestInvalidBackendGuard:
         assert result["type"] == FlowResultType.FORM  # type: ignore[typeddict-item]
         assert result["step_id"] == "user"  # type: ignore[typeddict-item]
         assert result["errors"]["base"] == "invalid_backend"  # type: ignore[typeddict-item]
+
+
+# ── Room Subentry Validation Error Tests ──────────────────────────────
+
+
+class TestRoomSubentryValidationErrors:
+    """Tests for room subentry validation error handling and form data preservation."""
+
+    async def test_user_step_no_trvs_selected_preserves_form_data(
+        self, hass: HomeAssistant
+    ):
+        """When no TRVs selected in add room flow, form data is preserved."""
+        _setup_mock_mqtt(hass)
+
+        entry = MockConfigEntry(
+            domain=DOMAIN,
+            data={CONF_BACKEND: BACKEND_Z2M, CONF_MQTT_BASE_TOPIC: "zigbee2mqtt"},
+            title="Danfoss Ally Gateway (Z2M: zigbee2mqtt)",
+        )
+        entry.add_to_hass(hass)
+
+        # Create flow handler and call step directly
+        flow = RoomSubentryFlowHandler()
+        flow.hass = hass
+        flow._get_entry = lambda: entry
+
+        # Submit with no TRVs selected
+        user_input = {
+            CONF_ROOM_NAME: "Living Room",
+            CONF_AREA: "area_123",
+            CONF_TRV_ENTITIES: [],  # No TRVs selected
+            CONF_AT_HOME_TEMP: 22.5,
+            CONF_AWAY_TEMP: 17.0,
+        }
+        result = await flow.async_step_user(user_input)
+
+        # Verify error is shown
+        assert result["type"] == FlowResultType.FORM  # type: ignore[typeddict-item]
+        assert result["errors"][CONF_TRV_ENTITIES] == "no_trvs_selected"  # type: ignore[typeddict-item]
+
+        # Verify form data is preserved via suggested_values
+        schema = result["data_schema"]
+        for key in schema.schema:
+            field_name = getattr(key, "schema", None)
+            if field_name == CONF_ROOM_NAME:
+                assert key.description["suggested_value"] == "Living Room"
+            elif field_name == CONF_AREA:
+                assert key.description["suggested_value"] == "area_123"
+            elif field_name == CONF_AT_HOME_TEMP:
+                assert key.description["suggested_value"] == 22.5
+            elif field_name == CONF_AWAY_TEMP:
+                assert key.description["suggested_value"] == 17.0
+
+    async def test_user_step_trv_already_assigned_preserves_form_data(
+        self, hass: HomeAssistant
+    ):
+        """When TRV already assigned in add room flow, form data is preserved."""
+        _setup_mock_mqtt(hass)
+
+        entry = MockConfigEntry(
+            domain=DOMAIN,
+            data={CONF_BACKEND: BACKEND_Z2M, CONF_MQTT_BASE_TOPIC: "zigbee2mqtt"},
+            title="Danfoss Ally Gateway (Z2M: zigbee2mqtt)",
+            subentries_data=(
+                {
+                    "subentry_id": "room_1",
+                    "subentry_type": SUBENTRY_ROOM,
+                    "title": "Bedroom",
+                    "data": {
+                        CONF_ROOM_NAME: "Bedroom",
+                        CONF_TRV_ENTITIES: ["device-uuid-123"],
+                    },
+                },
+            ),
+        )
+        entry.add_to_hass(hass)
+
+        # Create flow handler and call step directly
+        flow = RoomSubentryFlowHandler()
+        flow.hass = hass
+        flow._get_entry = lambda: entry
+
+        # Submit with a TRV that's already assigned to room_1
+        user_input = {
+            CONF_ROOM_NAME: "Kitchen",
+            CONF_AREA: "area_456",
+            CONF_TRV_ENTITIES: ["device-uuid-123"],  # Already assigned
+            CONF_TEMP_SENSOR: "sensor.kitchen_temp",
+            CONF_AT_HOME_TEMP: 21.0,
+        }
+        result = await flow.async_step_user(user_input)
+
+        # Verify error is shown
+        assert result["type"] == FlowResultType.FORM  # type: ignore[typeddict-item]
+        assert result["errors"][CONF_TRV_ENTITIES] == "trv_already_assigned"  # type: ignore[typeddict-item]
+
+        # Verify form data is preserved
+        schema = result["data_schema"]
+        for key in schema.schema:
+            field_name = getattr(key, "schema", None)
+            if field_name == CONF_ROOM_NAME:
+                assert key.description["suggested_value"] == "Kitchen"
+            elif field_name == CONF_AREA:
+                assert key.description["suggested_value"] == "area_456"
+            elif field_name == CONF_TEMP_SENSOR:
+                assert key.description["suggested_value"] == "sensor.kitchen_temp"
+            elif field_name == CONF_AT_HOME_TEMP:
+                assert key.description["suggested_value"] == 21.0
+
+    async def test_reconfigure_no_trvs_selected_preserves_form_data(
+        self, hass: HomeAssistant
+    ):
+        """When no TRVs selected in reconfigure flow, form data is preserved."""
+        _setup_mock_mqtt(hass)
+
+        entry = MockConfigEntry(
+            domain=DOMAIN,
+            data={CONF_BACKEND: BACKEND_Z2M, CONF_MQTT_BASE_TOPIC: "zigbee2mqtt"},
+            title="Danfoss Ally Gateway (Z2M: zigbee2mqtt)",
+            subentries_data=(
+                {
+                    "subentry_id": "room_1",
+                    "subentry_type": SUBENTRY_ROOM,
+                    "title": "Bedroom",
+                    "data": {
+                        CONF_ROOM_NAME: "Bedroom",
+                        CONF_TRV_ENTITIES: ["device-uuid-123"],
+                        CONF_AT_HOME_TEMP: 20.0,
+                    },
+                },
+            ),
+        )
+        entry.add_to_hass(hass)
+
+        # Create flow handler and call step directly
+        flow = RoomSubentryFlowHandler()
+        flow.hass = hass
+        flow._get_entry = lambda: entry
+        flow._get_reconfigure_subentry = lambda: entry.subentries["room_1"]
+
+        # Submit with modified data but no TRVs
+        user_input = {
+            CONF_ROOM_NAME: "Master Bedroom",
+            CONF_AREA: "upstairs",
+            CONF_TRV_ENTITIES: [],  # Deselected all TRVs
+            CONF_AT_HOME_TEMP: 22.0,
+        }
+        result = await flow.async_step_reconfigure(user_input)
+
+        # Verify error is shown
+        assert result["type"] == FlowResultType.FORM  # type: ignore[typeddict-item]
+        assert result["errors"][CONF_TRV_ENTITIES] == "no_trvs_selected"  # type: ignore[typeddict-item]
+
+        # Verify form data is preserved from user_input, not reset to original
+        schema = result["data_schema"]
+        for key in schema.schema:
+            field_name = getattr(key, "schema", None)
+            if field_name == CONF_ROOM_NAME:
+                assert key.description["suggested_value"] == "Master Bedroom"
+            elif field_name == CONF_AREA:
+                assert key.description["suggested_value"] == "upstairs"
+            elif field_name == CONF_AT_HOME_TEMP:
+                assert key.description["suggested_value"] == 22.0
+
+    async def test_reconfigure_trv_already_assigned_preserves_form_data(
+        self, hass: HomeAssistant
+    ):
+        """When TRV already assigned in reconfigure flow, form data is preserved."""
+        _setup_mock_mqtt(hass)
+
+        entry = MockConfigEntry(
+            domain=DOMAIN,
+            data={CONF_BACKEND: BACKEND_Z2M, CONF_MQTT_BASE_TOPIC: "zigbee2mqtt"},
+            title="Danfoss Ally Gateway (Z2M: zigbee2mqtt)",
+            subentries_data=(
+                {
+                    "subentry_id": "room_1",
+                    "subentry_type": SUBENTRY_ROOM,
+                    "title": "Bedroom",
+                    "data": {
+                        CONF_ROOM_NAME: "Bedroom",
+                        CONF_TRV_ENTITIES: ["device-uuid-123"],
+                    },
+                },
+                {
+                    "subentry_id": "room_2",
+                    "subentry_type": SUBENTRY_ROOM,
+                    "title": "Kitchen",
+                    "data": {
+                        CONF_ROOM_NAME: "Kitchen",
+                        CONF_TRV_ENTITIES: ["device-uuid-456"],
+                    },
+                },
+            ),
+        )
+        entry.add_to_hass(hass)
+
+        # Create flow handler and call step directly
+        flow = RoomSubentryFlowHandler()
+        flow.hass = hass
+        flow._get_entry = lambda: entry
+        flow._get_reconfigure_subentry = lambda: entry.subentries["room_1"]
+
+        # Try to assign a TRV that's already in room_2
+        user_input = {
+            CONF_ROOM_NAME: "Bedroom Updated",
+            CONF_TRV_ENTITIES: ["device-uuid-456"],  # Already in room_2
+            CONF_TEMP_SENSOR: "sensor.bedroom_temp",
+            CONF_AWAY_TEMP: 16.5,
+        }
+        result = await flow.async_step_reconfigure(user_input)
+
+        # Verify error is shown
+        assert result["type"] == FlowResultType.FORM  # type: ignore[typeddict-item]
+        assert result["errors"][CONF_TRV_ENTITIES] == "trv_already_assigned"  # type: ignore[typeddict-item]
+
+        # Verify form data is preserved
+        schema = result["data_schema"]
+        for key in schema.schema:
+            field_name = getattr(key, "schema", None)
+            if field_name == CONF_ROOM_NAME:
+                assert key.description["suggested_value"] == "Bedroom Updated"
+            elif field_name == CONF_TEMP_SENSOR:
+                assert key.description["suggested_value"] == "sensor.bedroom_temp"
+            elif field_name == CONF_AWAY_TEMP:
+                assert key.description["suggested_value"] == 16.5
