@@ -315,26 +315,18 @@ def _build_room_schema(
 
     """
     trv_selector = _build_trv_selector(backend)
-    is_reconfigure = defaults is not None
 
     def _field(
         key: str,
         required: bool = False,
         default: Any = vol.UNDEFINED,
     ) -> vol.Optional | vol.Required:
-        """Build a schema field, using suggested_value for reconfigure.
+        """Build a schema field.
 
-        For required fields and optional fields with an explicit default
-        (numbers, booleans), uses ``default=`` to pre-fill the value.
-        For purely optional fields (entities, areas), uses
-        ``suggested_value`` so the field can be left empty.
+        Required fields and optional fields with explicit defaults use
+        ``default=`` to prefill initial creation values.
         """
         cls = vol.Required if required else vol.Optional
-        if is_reconfigure and defaults is not None:
-            existing_val = defaults.get(key, "" if not required else vol.UNDEFINED)
-            if required or default is not vol.UNDEFINED:
-                return cls(key, default=existing_val)
-            return cls(key, description={"suggested_value": existing_val})
         if default is not vol.UNDEFINED:
             return cls(key, default=default)
         return cls(key)
@@ -422,9 +414,13 @@ class RoomSubentryFlowHandler(ConfigSubentryFlow):
         config_entry = self._get_entry()
         backend = config_entry.data.get(CONF_BACKEND, BACKEND_Z2M)
 
+        data_schema = _build_room_schema(backend)
+        if user_input is not None:
+            data_schema = self.add_suggested_values_to_schema(data_schema, user_input)
+
         return self.async_show_form(
             step_id="user",
-            data_schema=_build_room_schema(backend),
+            data_schema=data_schema,
             errors=errors,
         )
 
@@ -458,8 +454,13 @@ class RoomSubentryFlowHandler(ConfigSubentryFlow):
 
         backend = config_entry.data.get(CONF_BACKEND, BACKEND_Z2M)
 
+        data_schema = _build_room_schema(backend)
+        data_schema = self.add_suggested_values_to_schema(
+            data_schema, user_input if user_input is not None else dict(existing)
+        )
+
         return self.async_show_form(
             step_id="reconfigure",
-            data_schema=_build_room_schema(backend, defaults=dict(existing)),
+            data_schema=data_schema,
             errors=errors,
         )
