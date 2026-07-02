@@ -1,6 +1,6 @@
 {
   "name": "Danfoss Ally Gateway",
-  "homeassistant": "2025.6.0",
+  "homeassistant": "2026.6.0",
   "render_readme": true,
   "zip_release": true,
   "filename": "danfoss_ally_gateway.zip"
