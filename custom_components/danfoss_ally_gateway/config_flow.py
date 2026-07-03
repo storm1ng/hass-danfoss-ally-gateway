@@ -271,7 +271,22 @@ class DanfossAllyGatewayConfigFlow(ConfigFlow, domain=DOMAIN):
 
 
 def _extract_room_data(user_input: dict[str, Any]) -> dict[str, Any]:
-    """Extract room configuration data from user input."""
+    """Extract room configuration data from user input.
+
+    Temperature values are always validated and stored with defaults.
+    The coordinator will only use them when a schedule entity is configured.
+    """
+    schedule_entity = user_input.get(CONF_SCHEDULE_ENTITY, "")
+
+    # Always process and validate temperature values
+    at_home_temp = user_input.get(CONF_AT_HOME_TEMP)
+    if at_home_temp is None or at_home_temp == "":
+        at_home_temp = DEFAULT_AT_HOME_TEMP
+
+    away_temp = user_input.get(CONF_AWAY_TEMP)
+    if away_temp is None or away_temp == "":
+        away_temp = DEFAULT_AWAY_TEMP
+
     return {
         CONF_ROOM_NAME: user_input[CONF_ROOM_NAME],
         CONF_AREA: user_input.get(CONF_AREA, ""),
@@ -280,9 +295,9 @@ def _extract_room_data(user_input: dict[str, Any]) -> dict[str, Any]:
         CONF_HEAT_SOURCE: user_input.get(CONF_HEAT_SOURCE, ""),
         CONF_HEAT_SOURCE_TYPE: user_input.get(CONF_HEAT_SOURCE_TYPE, ""),
         CONF_REMOTE_CLIMATE: user_input.get(CONF_REMOTE_CLIMATE, ""),
-        CONF_SCHEDULE_ENTITY: user_input.get(CONF_SCHEDULE_ENTITY, ""),
-        CONF_AT_HOME_TEMP: user_input.get(CONF_AT_HOME_TEMP, DEFAULT_AT_HOME_TEMP),
-        CONF_AWAY_TEMP: user_input.get(CONF_AWAY_TEMP, DEFAULT_AWAY_TEMP),
+        CONF_SCHEDULE_ENTITY: schedule_entity,
+        CONF_AT_HOME_TEMP: at_home_temp,
+        CONF_AWAY_TEMP: away_temp,
         CONF_PREHEAT_ENABLED: user_input.get(CONF_PREHEAT_ENABLED, True),
     }
 
@@ -300,26 +315,18 @@ def _build_room_schema(
 
     """
     trv_selector = _build_trv_selector(backend)
-    is_reconfigure = defaults is not None
 
     def _field(
         key: str,
         required: bool = False,
         default: Any = vol.UNDEFINED,
     ) -> vol.Optional | vol.Required:
-        """Build a schema field, using suggested_value for reconfigure.
+        """Build a schema field.
 
-        For required fields and optional fields with an explicit default
-        (numbers, booleans), uses ``default=`` to pre-fill the value.
-        For purely optional fields (entities, areas), uses
-        ``suggested_value`` so the field can be left empty.
+        Required fields and optional fields with explicit defaults use
+        ``default=`` to prefill initial creation values.
         """
         cls = vol.Required if required else vol.Optional
-        if is_reconfigure and defaults is not None:
-            existing_val = defaults.get(key, "" if not required else vol.UNDEFINED)
-            if required or default is not vol.UNDEFINED:
-                return cls(key, default=existing_val)
-            return cls(key, description={"suggested_value": existing_val})
         if default is not vol.UNDEFINED:
             return cls(key, default=default)
         return cls(key)
@@ -407,9 +414,13 @@ class RoomSubentryFlowHandler(ConfigSubentryFlow):
         config_entry = self._get_entry()
         backend = config_entry.data.get(CONF_BACKEND, BACKEND_Z2M)
 
+        data_schema = _build_room_schema(backend)
+        if user_input is not None:
+            data_schema = self.add_suggested_values_to_schema(data_schema, user_input)
+
         return self.async_show_form(
             step_id="user",
-            data_schema=_build_room_schema(backend),
+            data_schema=data_schema,
             errors=errors,
         )
 
@@ -434,7 +445,7 @@ class RoomSubentryFlowHandler(ConfigSubentryFlow):
                 errors[CONF_TRV_ENTITIES] = "trv_already_assigned"
             else:
                 data = _extract_room_data(user_input)
-                return self.async_update_and_abort(
+                return self.async_update_reload_and_abort(
                     config_entry,
                     subentry,
                     title=data[CONF_ROOM_NAME],
@@ -443,8 +454,13 @@ class RoomSubentryFlowHandler(ConfigSubentryFlow):
 
         backend = config_entry.data.get(CONF_BACKEND, BACKEND_Z2M)
 
+        data_schema = _build_room_schema(backend)
+        data_schema = self.add_suggested_values_to_schema(
+            data_schema, user_input if user_input is not None else dict(existing)
+        )
+
         return self.async_show_form(
             step_id="reconfigure",
-            data_schema=_build_room_schema(backend, defaults=dict(existing)),
+            data_schema=data_schema,
             errors=errors,
         )

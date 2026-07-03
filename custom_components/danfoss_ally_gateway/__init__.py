@@ -7,12 +7,14 @@ locally in Home Assistant for TRVs paired to ZHA or Zigbee2MQTT.
 from __future__ import annotations
 
 import logging
+from copy import deepcopy
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry, ConfigSubentry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
 
 from .backend import DanfossBackend
 from .backend.z2m import Z2MBackend
@@ -43,6 +45,75 @@ def _assign_room_area(
     )
     if device is not None:
         dev_reg.async_update_device(device.id, area_id=area_id)
+
+
+def _compute_expected_unique_ids(
+    coordinator: RoomCoordinator,
+    entry_id: str,
+    subentry_id: str,
+) -> set[str]:
+    """Compute unique IDs of entities that should exist for a room.
+
+    Creates throwaway entity instances to collect their unique IDs without
+    actually registering them. This allows us to determine which entities
+    should exist for the current room configuration.
+    """
+    from .binary_sensor import create_room_entities as create_binary_sensor_entities
+    from .climate import create_room_entities as create_climate_entities
+    from .select import create_room_entities as create_select_entities
+    from .sensor import create_room_entities as create_sensor_entities
+    from .switch import create_room_entities as create_switch_entities
+
+    creators = [
+        create_climate_entities,
+        create_binary_sensor_entities,
+        create_sensor_entities,
+        create_select_entities,
+        create_switch_entities,
+    ]
+
+    unique_ids: set[str] = set()
+    for creator in creators:
+        for entity in creator(coordinator, entry_id, subentry_id):
+            if hasattr(entity, "_attr_unique_id"):
+                unique_ids.add(entity._attr_unique_id)
+
+    return unique_ids
+
+
+def _cleanup_orphaned_entities(
+    hass: HomeAssistant,
+    entry_id: str,
+    subentry_id: str,
+    expected_unique_ids: set[str],
+) -> None:
+    """Remove orphaned entities from the entity registry.
+
+    When a room is reconfigured to remove TRVs, per-TRV diagnostic entities
+    for removed TRVs become orphaned. This function removes them by comparing
+    the entity registry against the expected set of unique IDs for the current
+    room configuration.
+
+    This runs on boot (async_setup_entry) to clean up entities orphaned by
+    prior reconfigurations, and on subentry setup (async_setup_subentry) for
+    future-proofing if HA adds built-in subentry lifecycle support.
+    """
+    ent_reg = er.async_get(hass)
+
+    # Get all entities for this config entry and filter to this subentry
+    # using the config_subentry_id attribute (set by async_add_entities)
+    for entity in er.async_entries_for_config_entry(ent_reg, entry_id):
+        if (
+            entity.config_subentry_id == subentry_id
+            and entity.unique_id not in expected_unique_ids
+        ):
+            _LOGGER.info(
+                "Removing orphaned entity %s (unique_id: %s) from subentry %s",
+                entity.entity_id,
+                entity.unique_id,
+                subentry_id,
+            )
+            ent_reg.async_remove(entity.entity_id)
 
 
 def _create_backend(hass: HomeAssistant, entry: ConfigEntry) -> DanfossBackend:
@@ -86,12 +157,26 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Set up coordinators for existing room subentries
     for subentry_id, subentry in entry.subentries.items():
         if subentry.subentry_type == SUBENTRY_ROOM:
-            coordinator = RoomCoordinator(hass, backend, dict(subentry.data))
+            coordinator = RoomCoordinator(hass, backend, deepcopy(dict(subentry.data)))
             entry_data["coordinators"][subentry_id] = coordinator
             await coordinator.async_setup()
 
     # Forward to platforms
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+    # Clean up orphaned entities from prior configurations
+    # This handles entities left behind when TRVs were removed from rooms
+    # via reconfigure (which doesn't trigger a reload in the current implementation)
+    for subentry_id, subentry in entry.subentries.items():
+        if subentry.subentry_type == SUBENTRY_ROOM:
+            coordinator = entry_data["coordinators"].get(subentry_id)
+            if coordinator is not None:
+                expected_unique_ids = _compute_expected_unique_ids(
+                    coordinator, entry.entry_id, subentry_id
+                )
+                _cleanup_orphaned_entities(
+                    hass, entry.entry_id, subentry_id, expected_unique_ids
+                )
 
     # Assign areas to room devices (devices are created during platform setup)
     for subentry_id, subentry in entry.subentries.items():
@@ -147,7 +232,7 @@ async def async_setup_subentry(
         return False
 
     backend: DanfossBackend = entry_data["backend"]
-    coordinator = RoomCoordinator(hass, backend, dict(subentry.data))
+    coordinator = RoomCoordinator(hass, backend, deepcopy(dict(subentry.data)))
     entry_data["coordinators"][subentry.subentry_id] = coordinator
     await coordinator.async_setup()
 
@@ -168,6 +253,16 @@ async def async_setup_subentry(
         "switch": create_switch_entities,
     }
 
+    # Compute expected unique IDs and clean up orphaned entities
+    # This handles the case where TRVs were removed from the room
+    expected_unique_ids = _compute_expected_unique_ids(
+        coordinator, entry.entry_id, subentry.subentry_id
+    )
+    _cleanup_orphaned_entities(
+        hass, entry.entry_id, subentry.subentry_id, expected_unique_ids
+    )
+
+    # Now add the new entities
     for platform, creator in creators.items():
         add_entities = platform_callbacks.get(platform)
         if add_entities is not None:
