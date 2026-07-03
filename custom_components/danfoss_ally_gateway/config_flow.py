@@ -445,7 +445,7 @@ class RoomSubentryFlowHandler(ConfigSubentryFlow):
                 errors[CONF_TRV_ENTITIES] = "trv_already_assigned"
             else:
                 data = _extract_room_data(user_input)
-                return self.async_update_and_abort(
+                return self.async_update_reload_and_abort(
                     config_entry,
                     subentry,
                     title=data[CONF_ROOM_NAME],
