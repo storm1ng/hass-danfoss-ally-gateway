@@ -52,6 +52,31 @@ except ImportError:  # ZHA not installed
 
 _LOGGER = logging.getLogger(__name__)
 
+# ── Cluster attribute → TRVState field mapping ────────────────────────
+# Maps Danfoss quirk attribute names (as they appear on the zigpy cluster)
+# to (TRVState field name, normalizer) pairs.  The normalizer converts
+# zigpy enum / typed values to the plain Python types the coordinator expects.
+
+_to_int = lambda v: int(v) if v is not None else None  # noqa: E731
+_to_bool = lambda v: bool(v) if v is not None else None  # noqa: E731
+
+CLUSTER_ATTR_TO_TRV_STATE: dict[str, tuple[str, Callable[[Any], Any]]] = {
+    # Standard Thermostat attributes
+    "pi_heating_demand": ("pi_heating_demand", _to_int),
+    "setpoint_change_source": ("setpoint_change_source", _to_int),
+    # Danfoss manufacturer-specific attributes (DanfossThermostatCluster)
+    "open_window_detection": ("window_open_detection", _to_int),
+    "external_open_window_detected": ("external_window_open", _to_bool),
+    "radiator_covered": ("radiator_covered", _to_bool),
+    "heat_available": ("heat_available", _to_bool),
+    "heat_required": ("heat_required", _to_bool),
+    "load_balancing_enable": ("load_balancing_enable", _to_bool),
+    "load_room_mean": ("load_room_mean", _to_int),
+    "load_estimate": ("load_estimate", _to_int),
+    "preheat_status": ("preheat_status", _to_bool),
+    "preheat_time": ("preheat_time", _to_int),
+}
+
 
 class ZHABackend(DanfossBackend):
     """ZHA service call-based backend for Danfoss Ally TRVs.
@@ -227,25 +252,40 @@ class ZHABackend(DanfossBackend):
 
     @staticmethod
     def _parse_zha_state(entity_id: str, state: Any) -> TRVState:
-        """Parse ZHA entity state into TRVState."""
+        """Parse ZHA entity state into TRVState.
+
+        Only populates fields available from HA climate entity state
+        attributes (temperature, setpoint, pi_heating_demand).  Danfoss
+        manufacturer-specific attributes are populated separately via
+        cluster polling / event subscription.
+        """
         attrs = state.attributes if state else {}
         return TRVState(
             entity_id=entity_id,
             local_temperature=attrs.get("current_temperature"),
             occupied_heating_setpoint=attrs.get("temperature"),
-            pi_heating_demand=attrs.get("pi_heating_demand"),
-            heat_required=attrs.get("heat_required"),
-            load_estimate=attrs.get("load_estimate"),
-            load_balancing_enable=attrs.get("load_balancing_enable"),
-            heat_available=attrs.get("heat_available"),
-            preheat_status=attrs.get("preheat_status"),
-            preheat_time=attrs.get("preheat_time"),
-            window_open_detection=attrs.get("window_open_internal"),
-            external_window_open=attrs.get("window_open_external"),
-            setpoint_change_source=attrs.get("setpoint_change_source"),
-            radiator_covered=attrs.get("radiator_covered"),
+            pi_heating_demand=_to_int(attrs.get("pi_heating_demand")),
             raw=dict(attrs),
         )
+
+    @staticmethod
+    def _merge_cluster_attrs_into_state(
+        trv_state: TRVState,
+        cluster_attrs: dict[str, Any],
+    ) -> TRVState:
+        """Merge cluster attribute values into an existing TRVState.
+
+        Uses ``CLUSTER_ATTR_TO_TRV_STATE`` to map cluster attribute names
+        to TRVState fields and normalise values.
+        """
+        for attr_name, value in cluster_attrs.items():
+            mapping = CLUSTER_ATTR_TO_TRV_STATE.get(attr_name)
+            if mapping is None:
+                continue
+            field_name, normalizer = mapping
+            setattr(trv_state, field_name, normalizer(value))
+            trv_state.raw[attr_name] = value
+        return trv_state
 
     # ── ZHA cluster attribute helper ───────────────────────────────────
 
