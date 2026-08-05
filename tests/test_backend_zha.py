@@ -50,23 +50,18 @@ def _mock_entity_registry_entry(unique_id: str = "00:11:22:33:44:55:66:77-1"):
 
 
 class TestZHAStateParsing:
-    """Tests for ZHA state parsing."""
+    """Tests for ZHA state parsing.
 
-    def test_parse_full_state(self):
+    ``_parse_zha_state`` only extracts fields available from HA climate
+    entity state attributes.  Danfoss-specific attributes are populated
+    separately via ``_merge_cluster_attrs_into_state``.
+    """
+
+    def test_parse_ha_state_fields(self):
         attrs = {
             "current_temperature": 21.0,
             "temperature": 22.0,
             "pi_heating_demand": 40,
-            "load_estimate": 80,
-            "load_balancing_enable": True,
-            "heat_available": True,
-            "heat_required": True,
-            "preheat_status": False,
-            "preheat_time": None,
-            "window_open_internal": 0,
-            "window_open_external": False,
-            "setpoint_change_source": 1,
-            "radiator_covered": False,
         }
         state = _make_state(attributes=attrs)
         trv_state = ZHABackend._parse_zha_state("climate.trv1", state)
@@ -75,11 +70,11 @@ class TestZHAStateParsing:
         assert trv_state.local_temperature == 21.0
         assert trv_state.occupied_heating_setpoint == 22.0
         assert trv_state.pi_heating_demand == 40
-        assert trv_state.load_estimate == 80
-        assert trv_state.heat_available is True
-        assert trv_state.heat_required is True
-        assert trv_state.window_open_detection == 0
-        assert trv_state.setpoint_change_source == 1
+        # Danfoss-specific fields should remain None
+        assert trv_state.load_estimate is None
+        assert trv_state.heat_available is None
+        assert trv_state.window_open_detection is None
+        assert trv_state.setpoint_change_source is None
 
     def test_parse_minimal_state(self):
         state = _make_state(attributes={"current_temperature": 20.0})
@@ -99,6 +94,89 @@ class TestZHAStateParsing:
         state = _make_state(attributes=attrs)
         trv_state = ZHABackend._parse_zha_state("climate.trv1", state)
         assert trv_state.raw["custom_field"] == "test"
+
+
+# ── Cluster Attribute Merging & Normalization ─────────────────────────
+
+
+class TestClusterAttrMerging:
+    """Tests for _merge_cluster_attrs_into_state and value normalization."""
+
+    def test_merge_danfoss_attrs(self):
+        trv_state = TRVState(entity_id="climate.trv1")
+        cluster_attrs = {
+            "open_window_detection": 3,
+            "external_open_window_detected": True,
+            "heat_required": True,
+            "heat_available": False,
+            "load_estimate": 80,
+            "load_balancing_enable": True,
+            "preheat_status": False,
+            "preheat_time": 1700000000,
+            "setpoint_change_source": 1,
+            "radiator_covered": False,
+        }
+        result = ZHABackend._merge_cluster_attrs_into_state(trv_state, cluster_attrs)
+
+        assert result.window_open_detection == 3
+        assert result.external_window_open is True
+        assert result.heat_required is True
+        assert result.heat_available is False
+        assert result.load_estimate == 80
+        assert result.load_balancing_enable is True
+        assert result.preheat_status is False
+        assert result.preheat_time == 1700000000
+        assert result.setpoint_change_source == 1
+        assert result.radiator_covered is False
+
+    def test_merge_normalizes_enum_to_int(self):
+        """Zigpy enum types (with int base) should be normalized to plain int."""
+        trv_state = TRVState(entity_id="climate.trv1")
+
+        # Simulate zigpy enum value (enum with int base)
+        class FakeEnum(int):
+            pass
+
+        enum_val = FakeEnum(3)
+        cluster_attrs = {"open_window_detection": enum_val}
+        result = ZHABackend._merge_cluster_attrs_into_state(trv_state, cluster_attrs)
+        assert result.window_open_detection == 3
+        assert isinstance(result.window_open_detection, int)
+
+    def test_merge_normalizes_none_values(self):
+        trv_state = TRVState(entity_id="climate.trv1")
+        cluster_attrs = {
+            "heat_required": None,
+            "load_estimate": None,
+        }
+        result = ZHABackend._merge_cluster_attrs_into_state(trv_state, cluster_attrs)
+        assert result.heat_required is None
+        assert result.load_estimate is None
+
+    def test_merge_unknown_attrs_ignored(self):
+        trv_state = TRVState(entity_id="climate.trv1", local_temperature=21.0)
+        cluster_attrs = {"unknown_attr": 42}
+        result = ZHABackend._merge_cluster_attrs_into_state(trv_state, cluster_attrs)
+        assert result.local_temperature == 21.0  # unchanged
+
+    def test_merge_updates_raw(self):
+        trv_state = TRVState(entity_id="climate.trv1")
+        cluster_attrs = {"heat_required": True}
+        result = ZHABackend._merge_cluster_attrs_into_state(trv_state, cluster_attrs)
+        assert result.raw["heat_required"] is True
+
+    def test_merge_preserves_existing_fields(self):
+        """Merging cluster attrs should not overwrite HA state fields."""
+        trv_state = TRVState(
+            entity_id="climate.trv1",
+            local_temperature=21.0,
+            occupied_heating_setpoint=22.0,
+        )
+        cluster_attrs = {"load_estimate": 80}
+        result = ZHABackend._merge_cluster_attrs_into_state(trv_state, cluster_attrs)
+        assert result.local_temperature == 21.0
+        assert result.occupied_heating_setpoint == 22.0
+        assert result.load_estimate == 80
 
 
 # ── Lifecycle ─────────────────────────────────────────────────────────
