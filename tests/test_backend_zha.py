@@ -191,6 +191,7 @@ class TestZHALifecycle:
 
     async def test_setup(self, backend):
         await backend.async_setup()
+        await backend.async_teardown()
 
     async def test_teardown_clears_state(self, backend):
         backend._trv_states["trv1"] = TRVState(entity_id="trv1")
@@ -198,8 +199,191 @@ class TestZHALifecycle:
         assert len(backend._trv_states) == 0
         assert len(backend._subscriptions) == 0
 
+    async def test_setup_starts_poll_timer(self, backend):
+        await backend.async_setup()
+        assert backend._unsub_poll is not None
+        await backend.async_teardown()
 
-# ── Subscriptions ─────────────────────────────────────────────────────
+    async def test_teardown_cancels_poll_timer(self, backend):
+        await backend.async_setup()
+        assert backend._unsub_poll is not None
+        await backend.async_teardown()
+        assert backend._unsub_poll is None
+
+
+# ── Danfoss Attribute Polling ─────────────────────────────────────────
+
+
+class TestDanfossPolling:
+    """Tests for Danfoss-specific cluster attribute polling."""
+
+    @pytest.fixture
+    def backend(self, hass):
+        return ZHABackend(hass)
+
+    async def test_poll_merges_into_existing_state(self, backend):
+        """Polling merges cluster attrs into existing cached state."""
+        # Pre-populate with HA state
+        backend._trv_states["trv1"] = TRVState(
+            entity_id="trv1",
+            local_temperature=21.0,
+            occupied_heating_setpoint=22.0,
+        )
+
+        mock_cluster = MagicMock()
+        mock_cluster.read_attributes = AsyncMock(
+            return_value=(
+                {"heat_required": True, "load_estimate": 80, "preheat_status": False},
+                {},
+            )
+        )
+
+        with patch.object(backend, "_get_zigpy_cluster", return_value=mock_cluster):
+            await backend._async_poll_danfoss_attributes("trv1")
+
+        state = backend._trv_states["trv1"]
+        # HA state fields preserved
+        assert state.local_temperature == 21.0
+        assert state.occupied_heating_setpoint == 22.0
+        # Cluster fields merged
+        assert state.heat_required is True
+        assert state.load_estimate == 80
+        assert state.preheat_status is False
+
+    async def test_poll_creates_state_if_none(self, backend):
+        """Polling creates a TRVState if none is cached yet."""
+        mock_cluster = MagicMock()
+        mock_cluster.read_attributes = AsyncMock(
+            return_value=({"heat_required": True}, {})
+        )
+
+        with patch.object(backend, "_get_zigpy_cluster", return_value=mock_cluster):
+            await backend._async_poll_danfoss_attributes("trv1")
+
+        state = backend._trv_states["trv1"]
+        assert state.heat_required is True
+
+    async def test_poll_fires_state_update(self, backend):
+        """Polling fires a state update callback."""
+        cb = MagicMock()
+        backend.register_state_callback(cb)
+
+        mock_cluster = MagicMock()
+        mock_cluster.read_attributes = AsyncMock(
+            return_value=({"heat_required": True}, {})
+        )
+
+        with patch.object(backend, "_get_zigpy_cluster", return_value=mock_cluster):
+            await backend._async_poll_danfoss_attributes("trv1")
+
+        cb.assert_called_once()
+        assert cb.call_args[0][0] == "trv1"
+
+    async def test_poll_handles_cluster_not_found(self, backend):
+        """Polling gracefully handles missing cluster."""
+        with patch.object(backend, "_get_zigpy_cluster", return_value=None):
+            await backend._async_poll_danfoss_attributes("trv1")
+
+        assert "trv1" not in backend._trv_states
+
+    async def test_poll_handles_read_exception(self, backend):
+        """Polling gracefully handles read exceptions."""
+        mock_cluster = MagicMock()
+        mock_cluster.read_attributes = AsyncMock(side_effect=RuntimeError("Zigbee err"))
+
+        with patch.object(backend, "_get_zigpy_cluster", return_value=mock_cluster):
+            await backend._async_poll_danfoss_attributes("trv1")
+
+        assert "trv1" not in backend._trv_states
+
+    async def test_poll_handles_partial_failure(self, backend):
+        """Polling still processes successful reads on partial failure."""
+        backend._trv_states["trv1"] = TRVState(entity_id="trv1")
+
+        mock_cluster = MagicMock()
+        mock_cluster.read_attributes = AsyncMock(
+            return_value=(
+                {"heat_required": True},
+                {"load_estimate": Exception("timeout")},
+            )
+        )
+
+        with patch.object(backend, "_get_zigpy_cluster", return_value=mock_cluster):
+            await backend._async_poll_danfoss_attributes("trv1")
+
+        state = backend._trv_states["trv1"]
+        assert state.heat_required is True
+        assert state.load_estimate is None  # failed read
+
+    async def test_poll_all_iterates_subscriptions(self, backend):
+        """_async_poll_all_trvs polls each subscribed TRV."""
+        backend._subscriptions = {"trv1": MagicMock(), "trv2": MagicMock()}
+        polled = []
+
+        async def _mock_poll(trv_id):
+            polled.append(trv_id)
+
+        with patch.object(
+            backend, "_async_poll_danfoss_attributes", side_effect=_mock_poll
+        ):
+            await backend._async_poll_all_trvs()
+
+        assert set(polled) == {"trv1", "trv2"}
+
+
+# ── State Change Merging ─────────────────────────────────────────────
+
+
+class TestStateChangeMerging:
+    """Tests for HA state change preserving cluster-polled fields."""
+
+    @pytest.fixture
+    def backend(self, hass):
+        return ZHABackend(hass)
+
+    @patch(
+        "custom_components.danfoss_ally_gateway.backend.zha.async_track_state_change_event"
+    )
+    async def test_state_change_preserves_polled_fields(
+        self, mock_track, backend, hass
+    ):
+        """HA state change merges into existing state, preserving polled fields."""
+        mock_track.return_value = MagicMock()
+        hass.states = MagicMock()
+        hass.states.get.return_value = None
+
+        await backend.async_subscribe_trv("climate.trv1")
+
+        # Simulate polled Danfoss attrs already cached
+        backend._trv_states["climate.trv1"] = TRVState(
+            entity_id="climate.trv1",
+            heat_required=True,
+            load_estimate=80,
+            window_open_detection=3,
+        )
+
+        # Simulate HA state change
+        state_change_handler = mock_track.call_args[0][2]
+        new_state = _make_state(
+            attributes={
+                "current_temperature": 21.5,
+                "temperature": 23.0,
+                "pi_heating_demand": 50,
+            }
+        )
+        event = MagicMock()
+        event.data = {"new_state": new_state}
+        state_change_handler(event)
+
+        state = backend._trv_states["climate.trv1"]
+        # HA fields updated
+        assert state.local_temperature == 21.5
+        assert state.occupied_heating_setpoint == 23.0
+        assert state.pi_heating_demand == 50
+        # Polled fields preserved
+        assert state.heat_required is True
+        assert state.load_estimate == 80
+        assert state.window_open_detection == 3
 
 
 class TestZHASubscriptions:
