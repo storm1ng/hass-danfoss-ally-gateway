@@ -14,7 +14,7 @@ from homeassistant.core import HomeAssistant
 class TRVState:
     """Snapshot of a single TRV's current state."""
 
-    entity_id: str  # Z2M: friendly_name / Z2M device id; ZHA: entity_id
+    entity_id: str  # device registry UUID (used as universal TRV identifier)
     local_temperature: float | None = None
     occupied_heating_setpoint: float | None = None
     pi_heating_demand: int | None = None
@@ -90,6 +90,16 @@ class DanfossBackend(abc.ABC):
         """Notify all registered callbacks of a device announce event."""
         for callback in self._announce_callbacks:
             callback(trv_id)
+
+    @abc.abstractmethod
+    async def async_resolve_trv_identifier(self, device_registry_id: str) -> str | None:
+        """Resolve a device registry ID to a backend-specific communication identifier.
+
+        Z2M: returns the device friendly name (MQTT topic segment).
+        ZHA: returns the climate entity_id.
+
+        Returns None if the device cannot be resolved.
+        """
 
     @abc.abstractmethod
     async def async_setup(self) -> None:

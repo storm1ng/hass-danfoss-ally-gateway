@@ -90,6 +90,9 @@ class MockBackend(DanfossBackend):
     async def async_read_sw_error_code(self, trv_id):
         """Placeholder."""
 
+    async def async_resolve_trv_identifier(self, device_registry_id):
+        """Placeholder."""
+
     def __init__(self, hass):
         """Initialize mock backend."""
         super().__init__(hass)
@@ -110,6 +113,7 @@ class MockBackend(DanfossBackend):
         self.async_clear_weekly_schedule = AsyncMock()
         self.async_set_programming_mode = AsyncMock()
         self.async_read_sw_error_code = AsyncMock(return_value=None)
+        self.async_resolve_trv_identifier = AsyncMock(return_value=None)
 
     async def async_setup(self) -> None:
         """No-op setup."""

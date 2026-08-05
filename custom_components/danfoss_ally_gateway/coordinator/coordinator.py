@@ -29,14 +29,12 @@ from homeassistant.core import (
     callback,
     split_entity_id,
 )
-from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.event import (
     async_call_later,
     async_track_state_change_event,
 )
 
 from ..backend import DanfossBackend, TRVState
-from ..backend.z2m import Z2MBackend
 from ..const import (
     CONF_AT_HOME_TEMP,
     CONF_AWAY_TEMP,
@@ -204,31 +202,9 @@ class RoomCoordinator:
 
     # ── Lifecycle ─────────────────────────────────────────────────────
 
-    def _resolve_trv_id(self, trv_id: str) -> str:
-        """Resolve a device registry ID to a backend-specific TRV identifier."""
-        device_reg = dr.async_get(self.hass)
-        device = device_reg.async_get(trv_id)
-        if device is None:
-            return trv_id
-
-        if isinstance(self._backend, Z2MBackend):
-            return device.name or trv_id
-
-        _LOGGER.warning(
-            "No climate entity found for device %s, using device ID as-is",
-            trv_id,
-        )
-        return trv_id
-
     async def async_setup(self) -> None:
         """Set up the room coordinator."""
         _LOGGER.info("Setting up room coordinator for '%s'", self._room_name)
-
-        # Resolve device registry IDs
-        self._trv_ids[:] = [self._resolve_trv_id(tid) for tid in self._trv_ids]
-
-        # Rebuild delegate TRV tracking with resolved IDs
-        self._ext_temp.rebuild_trv_ids(self._trv_ids)
 
         # Subscribe to TRV state changes
         unsub = self._backend.register_state_callback(self._handle_trv_state_update)
