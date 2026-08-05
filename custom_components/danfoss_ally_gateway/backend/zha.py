@@ -119,6 +119,8 @@ class ZHABackend(DanfossBackend):
         # UUID <-> ZHA climate entity_id mapping
         self._id_to_entity: dict[str, str] = {}  # UUID -> entity_id
         self._entity_to_id: dict[str, str] = {}  # entity_id -> UUID
+        # Per-TRV zigpy cluster event unsubs
+        self._cluster_unsubs: dict[str, Callable[[], None]] = {}  # trv_id -> unsub
 
     # ── Resolution ──────────────────────────────────────────────────────
 
@@ -174,6 +176,7 @@ class ZHABackend(DanfossBackend):
         self._trv_states.clear()
         self._id_to_entity.clear()
         self._entity_to_id.clear()
+        self._cluster_unsubs.clear()
         _LOGGER.debug("ZHA backend teardown complete")
 
     @callback
@@ -277,12 +280,19 @@ class ZHABackend(DanfossBackend):
         # Initial poll for Danfoss-specific cluster attributes
         await self._async_poll_danfoss_attributes(trv_id)
 
+        # Subscribe to real-time cluster attribute report events
+        self._subscribe_cluster_events(trv_id)
+
     async def async_unsubscribe_trv(self, trv_id: str) -> None:
         """Unsubscribe from a ZHA entity."""
         unsub = self._subscriptions.pop(trv_id, None)
         if unsub is not None:
             unsub()
             _LOGGER.debug("Unsubscribed from TRV: %s", trv_id)
+        # Clean up cluster event subscription
+        cluster_unsub = self._cluster_unsubs.pop(trv_id, None)
+        if cluster_unsub is not None:
+            cluster_unsub()
         self._trv_states.pop(trv_id, None)
         # Clean up entity mapping
         entity_id = self._id_to_entity.pop(trv_id, None)
@@ -329,6 +339,59 @@ class ZHABackend(DanfossBackend):
             setattr(trv_state, field_name, normalizer(value))
             trv_state.raw[attr_name] = value
         return trv_state
+
+    # ── Cluster event subscription ─────────────────────────────────────
+
+    def _subscribe_cluster_events(self, trv_id: str) -> None:
+        """Subscribe to real-time zigpy cluster attribute report events.
+
+        Listens for ``attribute_updated`` events on the thermostat cluster
+        which fire when the TRV pushes attribute reports over Zigbee.
+        This provides real-time updates for reportable Danfoss attributes
+        (``open_window_detection``, ``heat_required``, ``load_estimate``,
+        ``preheat_status``, ``preheat_time``, etc.) without polling.
+        """
+        if trv_id in self._cluster_unsubs:
+            return
+
+        cluster = self._get_zigpy_cluster(trv_id, CLUSTER_THERMOSTAT)
+        if cluster is None:
+            _LOGGER.debug(
+                "Cannot subscribe to cluster events for %s (cluster not found)", trv_id
+            )
+            return
+
+        def _on_attribute_updated(event: Any) -> None:
+            """Handle a zigpy cluster attribute update event."""
+            attr_name = getattr(event, "attribute_name", None)
+            value = getattr(event, "value", None)
+            if attr_name is None:
+                return
+
+            mapping = CLUSTER_ATTR_TO_TRV_STATE.get(attr_name)
+            if mapping is None:
+                return  # Not a Danfoss attribute we track
+
+            field_name, normalizer = mapping
+            trv_state = self._trv_states.get(trv_id)
+            if trv_state is None:
+                trv_state = TRVState(entity_id=trv_id)
+                self._trv_states[trv_id] = trv_state
+
+            setattr(trv_state, field_name, normalizer(value))
+            trv_state.raw[attr_name] = value
+            self._fire_state_update(trv_id, trv_state)
+            _LOGGER.debug(
+                "Cluster event: %s.%s = %s (TRV %s)",
+                field_name,
+                attr_name,
+                value,
+                trv_id,
+            )
+
+        unsub = cluster.on_event("attribute_updated", _on_attribute_updated)
+        self._cluster_unsubs[trv_id] = unsub
+        _LOGGER.debug("Subscribed to cluster events for TRV %s", trv_id)
 
     # ── Zigpy cluster access ───────────────────────────────────────────
 

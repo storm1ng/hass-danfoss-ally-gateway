@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
+from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -384,6 +385,181 @@ class TestStateChangeMerging:
         assert state.heat_required is True
         assert state.load_estimate == 80
         assert state.window_open_detection == 3
+
+
+# ── Cluster Event Subscription ───────────────────────────────────────
+
+
+class TestClusterEventSubscription:
+    """Tests for real-time zigpy cluster attribute report event handling."""
+
+    @pytest.fixture
+    def backend(self, hass):
+        return ZHABackend(hass)
+
+    def test_subscribe_cluster_events(self, backend):
+        """Subscribes to cluster attribute_updated events."""
+        mock_cluster = MagicMock()
+        mock_cluster.on_event.return_value = MagicMock()  # unsub callable
+
+        with patch.object(backend, "_get_zigpy_cluster", return_value=mock_cluster):
+            backend._subscribe_cluster_events("trv1")
+
+        mock_cluster.on_event.assert_called_once_with("attribute_updated", mock.ANY)
+        assert "trv1" in backend._cluster_unsubs
+
+    def test_subscribe_cluster_events_no_cluster(self, backend):
+        """Gracefully handles missing cluster."""
+        with patch.object(backend, "_get_zigpy_cluster", return_value=None):
+            backend._subscribe_cluster_events("trv1")
+
+        assert "trv1" not in backend._cluster_unsubs
+
+    def test_subscribe_cluster_events_idempotent(self, backend):
+        """Second subscribe call for same TRV is a no-op."""
+        mock_cluster = MagicMock()
+        mock_cluster.on_event.return_value = MagicMock()
+
+        with patch.object(backend, "_get_zigpy_cluster", return_value=mock_cluster):
+            backend._subscribe_cluster_events("trv1")
+            backend._subscribe_cluster_events("trv1")
+
+        assert mock_cluster.on_event.call_count == 1
+
+    def test_cluster_event_updates_state(self, backend):
+        """Cluster attribute_updated event merges into cached state."""
+        backend._trv_states["trv1"] = TRVState(
+            entity_id="trv1",
+            local_temperature=21.0,
+        )
+        cb = MagicMock()
+        backend.register_state_callback(cb)
+
+        mock_cluster = MagicMock()
+        captured_handler = None
+
+        def capture_on_event(event_name, handler):
+            nonlocal captured_handler
+            captured_handler = handler
+            return MagicMock()
+
+        mock_cluster.on_event.side_effect = capture_on_event
+
+        with patch.object(backend, "_get_zigpy_cluster", return_value=mock_cluster):
+            backend._subscribe_cluster_events("trv1")
+
+        # Simulate a cluster attribute report
+        event = MagicMock()
+        event.attribute_name = "open_window_detection"
+        event.value = 3
+        captured_handler(event)
+
+        state = backend._trv_states["trv1"]
+        assert state.window_open_detection == 3
+        assert state.local_temperature == 21.0  # preserved
+        cb.assert_called_once()
+
+    def test_cluster_event_unknown_attr_ignored(self, backend):
+        """Unknown attribute names from cluster events are ignored."""
+        backend._trv_states["trv1"] = TRVState(entity_id="trv1")
+        cb = MagicMock()
+        backend.register_state_callback(cb)
+
+        mock_cluster = MagicMock()
+        captured_handler = None
+
+        def capture_on_event(event_name, handler):
+            nonlocal captured_handler
+            captured_handler = handler
+            return MagicMock()
+
+        mock_cluster.on_event.side_effect = capture_on_event
+
+        with patch.object(backend, "_get_zigpy_cluster", return_value=mock_cluster):
+            backend._subscribe_cluster_events("trv1")
+
+        event = MagicMock()
+        event.attribute_name = "some_unknown_attr"
+        event.value = 42
+        captured_handler(event)
+
+        # No state update should have been fired
+        cb.assert_not_called()
+
+    def test_cluster_event_creates_state_if_missing(self, backend):
+        """Cluster event creates TRVState if none cached yet."""
+        mock_cluster = MagicMock()
+        captured_handler = None
+
+        def capture_on_event(event_name, handler):
+            nonlocal captured_handler
+            captured_handler = handler
+            return MagicMock()
+
+        mock_cluster.on_event.side_effect = capture_on_event
+
+        with patch.object(backend, "_get_zigpy_cluster", return_value=mock_cluster):
+            backend._subscribe_cluster_events("trv1")
+
+        event = MagicMock()
+        event.attribute_name = "heat_required"
+        event.value = True
+        captured_handler(event)
+
+        assert "trv1" in backend._trv_states
+        assert backend._trv_states["trv1"].heat_required is True
+
+    def test_cluster_event_normalizes_enum(self, backend):
+        """Cluster event values are normalized via CLUSTER_ATTR_TO_TRV_STATE."""
+        backend._trv_states["trv1"] = TRVState(entity_id="trv1")
+
+        mock_cluster = MagicMock()
+        captured_handler = None
+
+        def capture_on_event(event_name, handler):
+            nonlocal captured_handler
+            captured_handler = handler
+            return MagicMock()
+
+        mock_cluster.on_event.side_effect = capture_on_event
+
+        with patch.object(backend, "_get_zigpy_cluster", return_value=mock_cluster):
+            backend._subscribe_cluster_events("trv1")
+
+        # Simulate zigpy enum value
+        class FakeEnum(int):
+            pass
+
+        event = MagicMock()
+        event.attribute_name = "open_window_detection"
+        event.value = FakeEnum(3)
+        captured_handler(event)
+
+        assert backend._trv_states["trv1"].window_open_detection == 3
+        assert isinstance(backend._trv_states["trv1"].window_open_detection, int)
+
+    async def test_unsubscribe_cleans_up_cluster_unsub(self, backend):
+        """async_unsubscribe_trv calls the cluster event unsub."""
+        mock_unsub = MagicMock()
+        backend._cluster_unsubs["trv1"] = mock_unsub
+        backend._subscriptions["trv1"] = MagicMock()
+
+        await backend.async_unsubscribe_trv("trv1")
+
+        mock_unsub.assert_called_once()
+        assert "trv1" not in backend._cluster_unsubs
+
+    async def test_teardown_clears_cluster_unsubs(self, backend):
+        """async_teardown clears all cluster unsubs."""
+        backend._cluster_unsubs["trv1"] = MagicMock()
+        backend._cluster_unsubs["trv2"] = MagicMock()
+
+        await backend.async_teardown()
+
+        assert len(backend._cluster_unsubs) == 0
+
+
+# ── Subscriptions ─────────────────────────────────────────────────────
 
 
 class TestZHASubscriptions:
