@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import time as _time
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from homeassistant.const import (
@@ -20,7 +20,10 @@ from homeassistant.core import Event, EventStateChangedData, HomeAssistant, call
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
-from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.helpers.event import (
+    async_track_state_change_event,
+    async_track_time_interval,
+)
 
 from ..const import (
     ATTR_EXTERNAL_MEASURED_ROOM_SENSOR,
@@ -77,6 +80,25 @@ CLUSTER_ATTR_TO_TRV_STATE: dict[str, tuple[str, Callable[[Any], Any]]] = {
     "preheat_time": ("preheat_time", _to_int),
 }
 
+# Attribute names to poll from the Danfoss thermostat cluster.
+# These use the quirk's attribute names (DanfossThermostatCluster.AttributeDefs).
+_POLL_ATTRIBUTE_NAMES: list[str] = [
+    "pi_heating_demand",
+    "setpoint_change_source",
+    "open_window_detection",
+    "external_open_window_detected",
+    "radiator_covered",
+    "heat_available",
+    "heat_required",
+    "load_balancing_enable",
+    "load_room_mean",
+    "load_estimate",
+    "preheat_status",
+    "preheat_time",
+]
+
+_POLL_INTERVAL = timedelta(seconds=30)
+
 
 class ZHABackend(DanfossBackend):
     """ZHA service call-based backend for Danfoss Ally TRVs.
@@ -93,6 +115,7 @@ class ZHABackend(DanfossBackend):
         self._subscriptions: dict[str, Any] = {}  # trv_id (UUID) -> unsubscribe
         self._trv_states: dict[str, TRVState] = {}  # trv_id (UUID) -> latest state
         self._unsub_dispatcher: Callable[[], None] | None = None
+        self._unsub_poll: Callable[[], None] | None = None
         # UUID <-> ZHA climate entity_id mapping
         self._id_to_entity: dict[str, str] = {}  # UUID -> entity_id
         self._entity_to_id: dict[str, str] = {}  # entity_id -> UUID
@@ -134,12 +157,18 @@ class ZHABackend(DanfossBackend):
         self._unsub_dispatcher = async_dispatcher_connect(
             self.hass, "zha_gateway_message", self._handle_zha_gateway_message
         )
+        self._unsub_poll = async_track_time_interval(
+            self.hass, self._async_poll_all_trvs, _POLL_INTERVAL
+        )
 
     async def async_teardown(self) -> None:
         """Tear down the ZHA backend."""
         if self._unsub_dispatcher is not None:
             self._unsub_dispatcher()
             self._unsub_dispatcher = None
+        if self._unsub_poll is not None:
+            self._unsub_poll()
+            self._unsub_poll = None
         for trv_id in list(self._subscriptions):
             await self.async_unsubscribe_trv(trv_id)
         self._trv_states.clear()
@@ -218,7 +247,18 @@ class ZHABackend(DanfossBackend):
             ):
                 return
 
-            trv_state = self._parse_zha_state(trv_id, new_state)
+            ha_state = self._parse_zha_state(trv_id, new_state)
+            # Merge HA state fields into existing cached state to preserve
+            # cluster-polled Danfoss attributes.
+            existing = self._trv_states.get(trv_id)
+            if existing is not None:
+                existing.local_temperature = ha_state.local_temperature
+                existing.occupied_heating_setpoint = ha_state.occupied_heating_setpoint
+                existing.pi_heating_demand = ha_state.pi_heating_demand
+                existing.raw.update(ha_state.raw)
+                trv_state = existing
+            else:
+                trv_state = ha_state
             self._trv_states[trv_id] = trv_state
             self._fire_state_update(trv_id, trv_state)
 
@@ -233,6 +273,9 @@ class ZHABackend(DanfossBackend):
         if state and state.state not in (STATE_UNAVAILABLE, STATE_UNKNOWN):
             trv_state = self._parse_zha_state(trv_id, state)
             self._trv_states[trv_id] = trv_state
+
+        # Initial poll for Danfoss-specific cluster attributes
+        await self._async_poll_danfoss_attributes(trv_id)
 
     async def async_unsubscribe_trv(self, trv_id: str) -> None:
         """Unsubscribe from a ZHA entity."""
@@ -286,6 +329,103 @@ class ZHABackend(DanfossBackend):
             setattr(trv_state, field_name, normalizer(value))
             trv_state.raw[attr_name] = value
         return trv_state
+
+    # ── Zigpy cluster access ───────────────────────────────────────────
+
+    def _get_zigpy_cluster(self, trv_id: str, cluster_id: int) -> Any | None:
+        """Return the zigpy Cluster object for *trv_id*, or ``None``.
+
+        Resolves UUID → entity_id → IEEE → ZHA gateway → zigpy device →
+        cluster.  Returns ``None`` (with a debug log) at any step that
+        fails, so callers can bail out gracefully.
+        """
+        _get_gateway = get_zha_gateway
+        if _get_gateway is None or EUI64 is None:
+            return None
+
+        entity_id = self._resolve_entity(trv_id)
+        entity_registry = er.async_get(self.hass)
+        entry = entity_registry.async_get(entity_id)
+        if entry is None:
+            _LOGGER.debug("ZHA entity not found: %s (UUID: %s)", entity_id, trv_id)
+            return None
+
+        ieee_str = (
+            entry.unique_id.split("-")[0] if "-" in entry.unique_id else entry.unique_id
+        )
+
+        try:
+            zha_gw = _get_gateway(self.hass)
+        except Exception:  # noqa: BLE001
+            _LOGGER.debug("ZHA gateway not available")
+            return None
+
+        try:
+            ieee = EUI64.convert(ieee_str)
+        except (ValueError, TypeError):
+            _LOGGER.error("Invalid IEEE address for %s: %s", trv_id, ieee_str)
+            return None
+
+        zha_device = zha_gw.get_device(ieee)
+        if zha_device is None:
+            _LOGGER.debug("ZHA device not found for %s (ieee=%s)", trv_id, ieee_str)
+            return None
+
+        cluster = zha_device.async_get_cluster(
+            endpoint_id=1, cluster_id=cluster_id, cluster_type="in"
+        )
+        if cluster is None:
+            _LOGGER.debug("Cluster 0x%04X not found on %s", cluster_id, trv_id)
+            return None
+
+        return cluster
+
+    # ── Danfoss attribute polling ──────────────────────────────────────
+
+    async def _async_poll_danfoss_attributes(self, trv_id: str) -> None:
+        """Read Danfoss-specific cluster attributes and merge into state.
+
+        Uses the Danfoss quirk's thermostat cluster which automatically
+        splits manufacturer-specific vs standard attribute reads.
+        """
+        cluster = self._get_zigpy_cluster(trv_id, CLUSTER_THERMOSTAT)
+        if cluster is None:
+            return
+
+        try:
+            success, failure = await cluster.read_attributes(
+                _POLL_ATTRIBUTE_NAMES,
+                allow_cache=False,
+                only_cache=False,
+            )
+        except Exception:  # noqa: BLE001
+            _LOGGER.debug("Failed to poll Danfoss attributes for %s", trv_id)
+            return
+
+        if failure:
+            _LOGGER.debug(
+                "Partial failure polling attributes for %s: %s", trv_id, failure
+            )
+
+        if not success:
+            return
+
+        # Convert keyed-by-name dict (zigpy returns {name: value})
+        cluster_attrs = {str(k): v for k, v in success.items()}
+
+        # Merge into cached TRV state (or create one if none exists yet)
+        trv_state = self._trv_states.get(trv_id)
+        if trv_state is None:
+            trv_state = TRVState(entity_id=trv_id)
+            self._trv_states[trv_id] = trv_state
+
+        self._merge_cluster_attrs_into_state(trv_state, cluster_attrs)
+        self._fire_state_update(trv_id, trv_state)
+
+    async def _async_poll_all_trvs(self, _now: Any = None) -> None:
+        """Poll Danfoss-specific attributes for all subscribed TRVs."""
+        for trv_id in list(self._subscriptions):
+            await self._async_poll_danfoss_attributes(trv_id)
 
     # ── ZHA cluster attribute helper ───────────────────────────────────
 
@@ -574,47 +714,8 @@ class ZHABackend(DanfossBackend):
         manufacturer: int | None = DANFOSS_MANUFACTURER_CODE,
     ) -> Any:
         """Read a Zigbee cluster attribute via the ZHA gateway."""
-        entity_id = self._resolve_entity(trv_id)
-        entity_registry = er.async_get(self.hass)
-        entry = entity_registry.async_get(entity_id)
-        if entry is None:
-            _LOGGER.error("ZHA entity not found: %s (UUID: %s)", entity_id, trv_id)
-            return None
-
-        ieee_str = (
-            entry.unique_id.split("-")[0] if "-" in entry.unique_id else entry.unique_id
-        )
-
-        _get_gateway = get_zha_gateway
-        if _get_gateway is None:
-            _LOGGER.debug("ZHA integration not available for attribute read")
-            return None
-
-        try:
-            zha_gw = _get_gateway(self.hass)
-        except Exception:  # noqa: BLE001
-            _LOGGER.debug("ZHA gateway not available for attribute read")
-            return None
-
-        if EUI64 is None:
-            return None
-
-        try:
-            ieee = EUI64.convert(ieee_str)
-        except (ValueError, TypeError):
-            _LOGGER.error("Invalid IEEE address for %s: %s", trv_id, ieee_str)
-            return None
-
-        zha_device = zha_gw.get_device(ieee)
-        if zha_device is None:
-            _LOGGER.debug("ZHA device not found for %s (ieee=%s)", trv_id, ieee_str)
-            return None
-
-        cluster = zha_device.async_get_cluster(
-            endpoint_id=1, cluster_id=cluster_id, cluster_type="in"
-        )
+        cluster = self._get_zigpy_cluster(trv_id, cluster_id)
         if cluster is None:
-            _LOGGER.debug("Cluster 0x%04X not found on %s", cluster_id, trv_id)
             return None
 
         mfr = manufacturer if manufacturer is not None else None
@@ -651,47 +752,8 @@ class ZHABackend(DanfossBackend):
         manufacturer: int | None = DANFOSS_MANUFACTURER_CODE,
     ) -> None:
         """Write a Zigbee cluster attribute via the ZHA gateway."""
-        entity_id = self._resolve_entity(trv_id)
-        entity_registry = er.async_get(self.hass)
-        entry = entity_registry.async_get(entity_id)
-        if entry is None:
-            _LOGGER.error("ZHA entity not found: %s (UUID: %s)", entity_id, trv_id)
-            return
-
-        ieee_str = (
-            entry.unique_id.split("-")[0] if "-" in entry.unique_id else entry.unique_id
-        )
-
-        _get_gateway = get_zha_gateway
-        if _get_gateway is None:
-            _LOGGER.debug("ZHA integration not available for attribute write")
-            return
-
-        try:
-            zha_gw = _get_gateway(self.hass)
-        except Exception:  # noqa: BLE001
-            _LOGGER.debug("ZHA gateway not available for attribute write")
-            return
-
-        if EUI64 is None:
-            return
-
-        try:
-            ieee = EUI64.convert(ieee_str)
-        except (ValueError, TypeError):
-            _LOGGER.error("Invalid IEEE address for %s: %s", trv_id, ieee_str)
-            return
-
-        zha_device = zha_gw.get_device(ieee)
-        if zha_device is None:
-            _LOGGER.debug("ZHA device not found for %s (ieee=%s)", trv_id, ieee_str)
-            return
-
-        cluster = zha_device.async_get_cluster(
-            endpoint_id=1, cluster_id=cluster_id, cluster_type="in"
-        )
+        cluster = self._get_zigpy_cluster(trv_id, cluster_id)
         if cluster is None:
-            _LOGGER.debug("Cluster 0x%04X not found on %s", cluster_id, trv_id)
             return
 
         mfr = manufacturer if manufacturer is not None else None
