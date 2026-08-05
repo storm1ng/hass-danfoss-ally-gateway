@@ -2,16 +2,12 @@
 
 from __future__ import annotations
 
-from types import MappingProxyType
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 from conftest import make_subentry_data, make_trv_state
-from homeassistant import config_entries
 from homeassistant.const import STATE_ON, STATE_UNAVAILABLE
-from homeassistant.helpers import device_registry as dr
 
-from custom_components.danfoss_ally_gateway.backend.z2m import Z2MBackend
 from custom_components.danfoss_ally_gateway.const import (
     CONF_TRV_ENTITIES,
     LOAD_BALANCE_DISABLED_VALUE,
@@ -788,139 +784,44 @@ class TestPowerCycleDetection:
 # ── Device ID Resolution ──────────────────────────────────────────────
 
 
-class TestDeviceIdResolution:
-    """Tests for resolving device registry IDs to backend-specific identifiers."""
+class TestDeviceIdHandling:
+    """Tests verifying coordinator passes device registry UUIDs unchanged.
 
-    @pytest.fixture
-    async def mock_config_entry(self, hass):
-        """Create a mock config entry for device registration."""
-        entry = config_entries.ConfigEntry(
-            data={},
-            discovery_keys=MappingProxyType({}),
-            domain="mqtt",
-            minor_version=1,
-            options={},
-            source="test",
-            subentries_data={},
-            title="MQTT",
-            unique_id="mqtt_test",
-            version=1,
-        )
-        entry.hass = hass
-        hass.config_entries._entries[entry.entry_id] = entry
-        return entry
+    Resolution from UUID to backend-specific identifier (e.g. Z2M friendly
+    name) is now the backend's responsibility, not the coordinator's.
+    """
 
-    async def test_unknown_id_falls_back(self, hass, mock_backend, subentry_data):
-        """IDs not in device registry are returned unchanged (backwards compat)."""
+    async def test_trv_ids_are_passed_through_unchanged(
+        self, hass, mock_backend, subentry_data
+    ):
+        """Coordinator should use TRV IDs from config as-is (no resolution)."""
         coord = RoomCoordinator(hass, mock_backend, subentry_data)
-        result = coord._resolve_trv_id("trv_1")
-        assert result == "trv_1"
-
-    async def test_z2m_resolves_to_device_name(self, hass, mock_config_entry):
-        """Z2M backend resolves device ID to device.name (Z2M friendly name)."""
-        device_reg = dr.async_get(hass)
-
-        device = device_reg.async_get_or_create(
-            config_entry_id=mock_config_entry.entry_id,
-            identifiers={("mqtt", "zigbee2mqtt_0x00158d0001234567")},
-            name="Living Room TRV",
-            manufacturer="Danfoss",
-            model="Ally thermostat",
-        )
-
-        z2m_backend = MagicMock(spec=Z2MBackend)
-        z2m_backend.register_state_callback = MagicMock(return_value=lambda: None)
-
-        data = make_subentry_data(trv_ids=[device.id])
-        coord = RoomCoordinator(hass, z2m_backend, data)
-
-        result = coord._resolve_trv_id(device.id)
-        assert result == "Living Room TRV"
-
-    async def test_z2m_ignores_user_renamed_name(self, hass, mock_config_entry):
-        """Z2M resolution uses device.name, not name_by_user."""
-        device_reg = dr.async_get(hass)
-
-        device = device_reg.async_get_or_create(
-            config_entry_id=mock_config_entry.entry_id,
-            identifiers={("mqtt", "zigbee2mqtt_0x00158d0001234567")},
-            name="Living Room TRV",
-            manufacturer="Danfoss",
-            model="Ally thermostat",
-        )
-        device_reg.async_update_device(device.id, name_by_user="My Custom Name")
-
-        z2m_backend = MagicMock(spec=Z2MBackend)
-        z2m_backend.register_state_callback = MagicMock(return_value=lambda: None)
-
-        data = make_subentry_data(trv_ids=[device.id])
-        coord = RoomCoordinator(hass, z2m_backend, data)
-
-        result = coord._resolve_trv_id(device.id)
-        assert result == "Living Room TRV"
-
-    async def test_setup_resolves_all_trv_ids(self, hass, mock_config_entry):
-        """async_setup resolves all TRV device IDs before subscribing."""
-        device_reg = dr.async_get(hass)
-
-        dev1 = device_reg.async_get_or_create(
-            config_entry_id=mock_config_entry.entry_id,
-            identifiers={("mqtt", "zigbee2mqtt_0x001")},
-            name="TRV One",
-            manufacturer="Danfoss",
-            model="Ally thermostat",
-        )
-        dev2 = device_reg.async_get_or_create(
-            config_entry_id=mock_config_entry.entry_id,
-            identifiers={("mqtt", "zigbee2mqtt_0x002")},
-            name="TRV Two",
-            manufacturer="Popp",
-            model="Smart thermostat",
-        )
-
-        z2m_backend = MagicMock(spec=Z2MBackend)
-        z2m_backend.register_state_callback = MagicMock(return_value=lambda: None)
-        z2m_backend.async_subscribe_trv = AsyncMock()
-
-        data = make_subentry_data(trv_ids=[dev1.id, dev2.id])
-        coord = RoomCoordinator(hass, z2m_backend, data)
         await coord.async_setup()
 
-        assert coord.trv_ids == ["TRV One", "TRV Two"]
-        z2m_backend.async_subscribe_trv.assert_any_call("TRV One")
-        z2m_backend.async_subscribe_trv.assert_any_call("TRV Two")
+        # Default subentry_data uses ["trv_1", "trv_2"]
+        assert coord.trv_ids == ["trv_1", "trv_2"]
+        assert "trv_1" in mock_backend._subscribed_trvs
+        assert "trv_2" in mock_backend._subscribed_trvs
         await coord.async_teardown()
 
-    async def test_setup_resolves_trv_ids_in_all_delegates(
-        self, hass, mock_config_entry
-    ):
-        """async_setup propagates resolved TRV IDs to all delegates."""
-        device_reg = dr.async_get(hass)
-
-        dev1 = device_reg.async_get_or_create(
-            config_entry_id=mock_config_entry.entry_id,
-            identifiers={("mqtt", "zigbee2mqtt_0x001")},
-            name="TRV One",
-            manufacturer="Danfoss",
-            model="Ally thermostat",
-        )
-        dev2 = device_reg.async_get_or_create(
-            config_entry_id=mock_config_entry.entry_id,
-            identifiers={("mqtt", "zigbee2mqtt_0x002")},
-            name="TRV Two",
-            manufacturer="Popp",
-            model="Smart thermostat",
-        )
-
-        z2m_backend = MagicMock(spec=Z2MBackend)
-        z2m_backend.register_state_callback = MagicMock(return_value=lambda: None)
-        z2m_backend.async_subscribe_trv = AsyncMock()
-
-        data = make_subentry_data(trv_ids=[dev1.id, dev2.id])
-        coord = RoomCoordinator(hass, z2m_backend, data)
+    async def test_device_uuids_passed_through_unchanged(self, hass, mock_backend):
+        """Device registry UUIDs should be passed to the backend without resolution."""
+        data = make_subentry_data(trv_ids=["uuid-abc-123", "uuid-def-456"])
+        coord = RoomCoordinator(hass, mock_backend, data)
         await coord.async_setup()
 
-        expected = ["TRV One", "TRV Two"]
+        assert coord.trv_ids == ["uuid-abc-123", "uuid-def-456"]
+        assert "uuid-abc-123" in mock_backend._subscribed_trvs
+        assert "uuid-def-456" in mock_backend._subscribed_trvs
+        await coord.async_teardown()
+
+    async def test_trv_ids_propagated_to_all_delegates(self, hass, mock_backend):
+        """TRV IDs should be shared across all delegates via the same list reference."""
+        data = make_subentry_data(trv_ids=["uuid-1", "uuid-2"])
+        coord = RoomCoordinator(hass, mock_backend, data)
+        await coord.async_setup()
+
+        expected = ["uuid-1", "uuid-2"]
         assert coord._schedule._trv_ids == expected
         assert coord._setpoint._trv_ids == expected
         assert coord._window._trv_ids == expected
@@ -928,59 +829,24 @@ class TestDeviceIdResolution:
         assert coord._load_balance._trv_ids == expected
         assert coord._time_sync._trv_ids == expected
         assert coord._ext_temp._trv_ids == expected
+
+        # Verify they are the SAME list object (shared reference)
+        assert coord._schedule._trv_ids is coord._trv_ids
+        assert coord._ext_temp._trv_ids is coord._trv_ids
         await coord.async_teardown()
 
-    async def test_backwards_compat_old_friendly_names(self, hass, mock_backend):
-        """Old subentries storing friendly names directly still work."""
-        data = make_subentry_data(trv_ids=["Living Room TRV", "Kitchen TRV"])
+    async def test_setup_does_not_mutate_original_data(self, hass, mock_backend):
+        """Coordinator setup should not mutate the original subentry data dict."""
+        original_trv_ids = ["uuid-abc", "uuid-def"]
+        data = make_subentry_data(trv_ids=original_trv_ids.copy())
+
         coord = RoomCoordinator(hass, mock_backend, data)
         await coord.async_setup()
 
-        assert coord.trv_ids == ["Living Room TRV", "Kitchen TRV"]
-        assert "Living Room TRV" in mock_backend._subscribed_trvs
-        assert "Kitchen TRV" in mock_backend._subscribed_trvs
-        await coord.async_teardown()
-
-    async def test_setup_does_not_mutate_original_data(self, hass, mock_config_entry):
-        """Coordinator setup should not mutate the original subentry data dict."""
-        device_reg = dr.async_get(hass)
-
-        # Create devices with registry IDs
-        dev1 = device_reg.async_get_or_create(
-            config_entry_id=mock_config_entry.entry_id,
-            identifiers={("mqtt", "zigbee2mqtt_0x001")},
-            name="Living Room TRV",
-            manufacturer="Danfoss",
-            model="Ally thermostat",
-        )
-        dev2 = device_reg.async_get_or_create(
-            config_entry_id=mock_config_entry.entry_id,
-            identifiers={("mqtt", "zigbee2mqtt_0x002")},
-            name="Kitchen TRV",
-            manufacturer="Danfoss",
-            model="Ally thermostat",
-        )
-
-        # Create subentry data with device registry IDs
-        original_trv_ids = [dev1.id, dev2.id]
-        data = make_subentry_data(trv_ids=original_trv_ids.copy())
-
-        # Create coordinator and setup (which resolves IDs to friendly names)
-        z2m_backend = MagicMock(spec=Z2MBackend)
-        z2m_backend.register_state_callback = MagicMock(return_value=lambda: None)
-        z2m_backend.async_subscribe_trv = AsyncMock()
-
-        coord = RoomCoordinator(hass, z2m_backend, data)
-        await coord.async_setup()
-
-        # Verify the original data dict still has device registry IDs
+        # Original data dict should be unchanged
         assert data[CONF_TRV_ENTITIES] == original_trv_ids
-        assert data[CONF_TRV_ENTITIES][0] == dev1.id
-        assert data[CONF_TRV_ENTITIES][1] == dev2.id
-
-        # Verify coordinator has resolved friendly names
-        assert coord.trv_ids == ["Living Room TRV", "Kitchen TRV"]
-
+        # Coordinator should have the same IDs (no resolution)
+        assert coord.trv_ids == original_trv_ids
         await coord.async_teardown()
 
 

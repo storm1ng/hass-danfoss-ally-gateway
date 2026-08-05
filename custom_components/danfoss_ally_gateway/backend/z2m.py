@@ -13,6 +13,7 @@ from typing import Any
 
 from homeassistant.components import mqtt
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import device_registry as dr
 
 from ..const import (
     EXTERNAL_TEMP_DISABLED,
@@ -168,9 +169,11 @@ def _parse_trv_state(trv_id: str, payload: dict[str, Any]) -> TRVState:
 class Z2MBackend(DanfossBackend):
     """Zigbee2MQTT MQTT-based backend for Danfoss Ally TRVs.
 
-    TRV IDs are the Z2M friendly_name (the MQTT topic name for the device).
+    TRV IDs are device registry UUIDs. The backend maintains an internal
+    mapping from UUID to Z2M friendly_name for MQTT topic construction.
     For example, if the device is at ``zigbee2mqtt/Living Room TRV``, the
-    trv_id is ``Living Room TRV``.
+    friendly_name is ``Living Room TRV`` and the trv_id is the device's
+    HA device registry UUID.
     """
 
     def __init__(self, hass: HomeAssistant, base_topic: str = "zigbee2mqtt") -> None:
@@ -182,11 +185,35 @@ class Z2MBackend(DanfossBackend):
         """
         super().__init__(hass)
         self._base_topic = base_topic.rstrip("/")
-        self._subscriptions: dict[str, Any] = {}  # trv_id -> unsubscribe callable
-        self._trv_states: dict[str, TRVState] = {}  # trv_id -> latest state
+        self._subscriptions: dict[str, Any] = {}  # trv_id (UUID) -> unsubscribe
+        self._trv_states: dict[str, TRVState] = {}  # trv_id (UUID) -> latest state
         self._bridge_event_unsub: Any = None  # bridge/event subscription
+        # UUID <-> Z2M friendly_name mapping
+        self._id_to_name: dict[str, str] = {}  # UUID -> friendly_name
+        self._name_to_id: dict[str, str] = {}  # friendly_name -> UUID
 
     # ── Lifecycle ──────────────────────────────────────────────────────
+
+    async def async_resolve_trv_identifier(self, device_registry_id: str) -> str | None:
+        """Resolve a device registry ID to a Z2M friendly name.
+
+        Returns the device.name from the HA device registry, which
+        corresponds to the Z2M friendly_name used in MQTT topics.
+        Returns None if the device is not found.
+        """
+        device_reg = dr.async_get(self.hass)
+        device = device_reg.async_get(device_registry_id)
+        if device is None:
+            return None
+        return device.name or None
+
+    def _resolve_name(self, trv_id: str) -> str:
+        """Resolve a TRV UUID to its Z2M friendly name for MQTT topics.
+
+        Falls back to using the trv_id as-is if no mapping exists
+        (backwards compatibility with old configs storing friendly names).
+        """
+        return self._id_to_name.get(trv_id, trv_id)
 
     async def async_setup(self) -> None:
         """Set up the Z2M backend."""
@@ -206,9 +233,16 @@ class Z2MBackend(DanfossBackend):
             if payload.get("type") != "device_announce":
                 return
             friendly_name = payload.get("data", {}).get("friendly_name")
-            if friendly_name and friendly_name in self._subscriptions:
-                _LOGGER.debug("Device announce for subscribed TRV: %s", friendly_name)
-                self._fire_device_announce(friendly_name)
+            if friendly_name:
+                # Reverse-lookup: friendly_name -> UUID
+                trv_uuid = self._name_to_id.get(friendly_name)
+                if trv_uuid and trv_uuid in self._subscriptions:
+                    _LOGGER.debug(
+                        "Device announce for subscribed TRV: %s (UUID: %s)",
+                        friendly_name,
+                        trv_uuid,
+                    )
+                    self._fire_device_announce(trv_uuid)
 
         self._bridge_event_unsub = await mqtt.async_subscribe(
             self.hass, bridge_topic, _handle_bridge_event
@@ -222,17 +256,37 @@ class Z2MBackend(DanfossBackend):
         for trv_id in list(self._subscriptions):
             await self.async_unsubscribe_trv(trv_id)
         self._trv_states.clear()
+        self._id_to_name.clear()
+        self._name_to_id.clear()
         _LOGGER.debug("Z2M backend teardown complete")
 
     # ── Subscriptions ──────────────────────────────────────────────────
 
     async def async_subscribe_trv(self, trv_id: str) -> None:
-        """Subscribe to MQTT topic for a TRV."""
+        """Subscribe to MQTT topic for a TRV.
+
+        Args:
+            trv_id: Device registry UUID (or legacy friendly name).
+        """
         if trv_id in self._subscriptions:
             _LOGGER.debug("Already subscribed to TRV: %s", trv_id)
             return
 
-        topic = f"{self._base_topic}/{trv_id}"
+        # Resolve UUID -> friendly name for MQTT topic
+        friendly_name = self._id_to_name.get(trv_id)
+        if friendly_name is None:
+            # Try resolving from device registry (first subscription)
+            resolved = await self.async_resolve_trv_identifier(trv_id)
+            if resolved is not None:
+                friendly_name = resolved
+                self._id_to_name[trv_id] = friendly_name
+                self._name_to_id[friendly_name] = trv_id
+            else:
+                # Fallback: treat trv_id as the friendly name itself
+                # (backwards compat for old configs or test fixtures)
+                friendly_name = trv_id
+
+        topic = f"{self._base_topic}/{friendly_name}"
 
         @callback
         def _handle_message(msg: mqtt.ReceiveMessage) -> None:
@@ -264,6 +318,10 @@ class Z2MBackend(DanfossBackend):
             unsub()
             _LOGGER.debug("Unsubscribed from TRV: %s", trv_id)
         self._trv_states.pop(trv_id, None)
+        # Clean up name mapping
+        friendly_name = self._id_to_name.pop(trv_id, None)
+        if friendly_name is not None:
+            self._name_to_id.pop(friendly_name, None)
 
     async def async_get_trv_state(self, trv_id: str) -> TRVState | None:
         """Return cached TRV state."""
@@ -358,7 +416,8 @@ class Z2MBackend(DanfossBackend):
 
     async def _async_set(self, trv_id: str, payload: dict[str, Any]) -> None:
         """Publish a set command to a TRV via Z2M."""
-        topic = f"{self._base_topic}/{trv_id}/set"
+        friendly_name = self._resolve_name(trv_id)
+        topic = f"{self._base_topic}/{friendly_name}/set"
         message = json.dumps(payload)
         await mqtt.async_publish(self.hass, topic, message)
         _LOGGER.debug("Published to %s: %s", topic, message)
@@ -367,7 +426,8 @@ class Z2MBackend(DanfossBackend):
         self, trv_id: str, attributes: dict[str, str] | None = None
     ) -> None:
         """Publish a get request to a TRV via Z2M to refresh state."""
-        topic = f"{self._base_topic}/{trv_id}/get"
+        friendly_name = self._resolve_name(trv_id)
+        topic = f"{self._base_topic}/{friendly_name}/get"
         # Z2M expects {"<attribute>": ""} to request specific attributes,
         # or just a get to the topic to refresh all.
         payload = attributes or {Z2M_ATTR_LOCAL_TEMPERATURE: ""}

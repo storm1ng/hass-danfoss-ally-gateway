@@ -707,3 +707,323 @@ class TestParserUnexpectedTypes:
 
     def test_bool_unexpected_type_dict(self):
         assert _parse_bool({}) is None
+
+
+# ── UUID-to-Friendly-Name Mapping ────────────────────────────────────
+
+
+class TestZ2MUuidMapping:
+    """Tests for device registry UUID to Z2M friendly name mapping."""
+
+    @pytest.fixture
+    def backend(self, hass):
+        return Z2MBackend(hass, base_topic="zigbee2mqtt")
+
+    async def test_resolve_trv_identifier_found(self, hass, backend):
+        """Resolving a known device UUID returns device.name."""
+        from types import MappingProxyType
+
+        from homeassistant import config_entries
+        from homeassistant.helpers import device_registry as dr
+
+        entry = config_entries.ConfigEntry(
+            data={},
+            discovery_keys=MappingProxyType({}),
+            domain="mqtt",
+            minor_version=1,
+            options={},
+            source="test",
+            subentries_data={},
+            title="MQTT",
+            unique_id="mqtt_uuid_test",
+            version=1,
+        )
+        entry.hass = hass
+        hass.config_entries._entries[entry.entry_id] = entry
+
+        device_reg = dr.async_get(hass)
+        device = device_reg.async_get_or_create(
+            config_entry_id=entry.entry_id,
+            identifiers={("mqtt", "zigbee2mqtt_0x001")},
+            name="Living Room TRV",
+            manufacturer="Danfoss",
+            model="Ally thermostat",
+        )
+
+        result = await backend.async_resolve_trv_identifier(device.id)
+        assert result == "Living Room TRV"
+
+    async def test_resolve_trv_identifier_not_found(self, backend):
+        """Resolving an unknown UUID returns None."""
+        result = await backend.async_resolve_trv_identifier("nonexistent-uuid")
+        assert result is None
+
+    @patch("custom_components.danfoss_ally_gateway.backend.z2m.mqtt")
+    async def test_subscribe_with_uuid_resolves_topic(self, mock_mqtt, hass):
+        """Subscribing with a UUID resolves to friendly name for MQTT topic."""
+        from types import MappingProxyType
+
+        from homeassistant import config_entries
+        from homeassistant.helpers import device_registry as dr
+
+        entry = config_entries.ConfigEntry(
+            data={},
+            discovery_keys=MappingProxyType({}),
+            domain="mqtt",
+            minor_version=1,
+            options={},
+            source="test",
+            subentries_data={},
+            title="MQTT",
+            unique_id="mqtt_uuid_sub_test",
+            version=1,
+        )
+        entry.hass = hass
+        hass.config_entries._entries[entry.entry_id] = entry
+
+        device_reg = dr.async_get(hass)
+        device = device_reg.async_get_or_create(
+            config_entry_id=entry.entry_id,
+            identifiers={("mqtt", "zigbee2mqtt_0x001")},
+            name="Living Room TRV",
+            manufacturer="Danfoss",
+            model="Ally thermostat",
+        )
+
+        backend = Z2MBackend(hass, base_topic="zigbee2mqtt")
+        mock_mqtt.async_subscribe = AsyncMock(return_value=MagicMock())
+        mock_mqtt.async_publish = AsyncMock()
+
+        await backend.async_subscribe_trv(device.id)
+
+        # MQTT topic should use the friendly name, not the UUID
+        call_args = mock_mqtt.async_subscribe.call_args
+        assert call_args[0][1] == "zigbee2mqtt/Living Room TRV"
+
+        # Subscription dict should be keyed by UUID
+        assert device.id in backend._subscriptions
+
+        # Mapping should be populated
+        assert backend._id_to_name[device.id] == "Living Room TRV"
+        assert backend._name_to_id["Living Room TRV"] == device.id
+
+    @patch("custom_components.danfoss_ally_gateway.backend.z2m.mqtt")
+    async def test_set_with_uuid_uses_friendly_name_topic(self, mock_mqtt, hass):
+        """_async_set translates UUID to friendly name for MQTT topic."""
+        from types import MappingProxyType
+
+        from homeassistant import config_entries
+        from homeassistant.helpers import device_registry as dr
+
+        entry = config_entries.ConfigEntry(
+            data={},
+            discovery_keys=MappingProxyType({}),
+            domain="mqtt",
+            minor_version=1,
+            options={},
+            source="test",
+            subentries_data={},
+            title="MQTT",
+            unique_id="mqtt_uuid_set_test",
+            version=1,
+        )
+        entry.hass = hass
+        hass.config_entries._entries[entry.entry_id] = entry
+
+        device_reg = dr.async_get(hass)
+        device = device_reg.async_get_or_create(
+            config_entry_id=entry.entry_id,
+            identifiers={("mqtt", "zigbee2mqtt_0x001")},
+            name="Kitchen TRV",
+            manufacturer="Danfoss",
+            model="Ally thermostat",
+        )
+
+        backend = Z2MBackend(hass, base_topic="zigbee2mqtt")
+        mock_mqtt.async_subscribe = AsyncMock(return_value=MagicMock())
+        mock_mqtt.async_publish = AsyncMock()
+
+        # Subscribe first to populate the mapping
+        await backend.async_subscribe_trv(device.id)
+        mock_mqtt.async_publish.reset_mock()
+
+        # Now set an attribute using the UUID
+        await backend.async_set_heat_available(device.id, True)
+
+        call_args = mock_mqtt.async_publish.call_args
+        assert call_args[0][1] == "zigbee2mqtt/Kitchen TRV/set"
+
+    @patch("custom_components.danfoss_ally_gateway.backend.z2m.mqtt")
+    async def test_unsubscribe_cleans_up_mapping(self, mock_mqtt, hass):
+        """Unsubscribing cleans up the UUID-to-name mapping."""
+        from types import MappingProxyType
+
+        from homeassistant import config_entries
+        from homeassistant.helpers import device_registry as dr
+
+        entry = config_entries.ConfigEntry(
+            data={},
+            discovery_keys=MappingProxyType({}),
+            domain="mqtt",
+            minor_version=1,
+            options={},
+            source="test",
+            subentries_data={},
+            title="MQTT",
+            unique_id="mqtt_uuid_unsub_test",
+            version=1,
+        )
+        entry.hass = hass
+        hass.config_entries._entries[entry.entry_id] = entry
+
+        device_reg = dr.async_get(hass)
+        device = device_reg.async_get_or_create(
+            config_entry_id=entry.entry_id,
+            identifiers={("mqtt", "zigbee2mqtt_0x001")},
+            name="Bedroom TRV",
+            manufacturer="Danfoss",
+            model="Ally thermostat",
+        )
+
+        backend = Z2MBackend(hass, base_topic="zigbee2mqtt")
+        mock_mqtt.async_subscribe = AsyncMock(return_value=MagicMock())
+        mock_mqtt.async_publish = AsyncMock()
+
+        await backend.async_subscribe_trv(device.id)
+        assert device.id in backend._id_to_name
+        assert "Bedroom TRV" in backend._name_to_id
+
+        await backend.async_unsubscribe_trv(device.id)
+        assert device.id not in backend._id_to_name
+        assert "Bedroom TRV" not in backend._name_to_id
+
+    @patch("custom_components.danfoss_ally_gateway.backend.z2m.mqtt")
+    async def test_bridge_event_announce_uses_uuid(self, mock_mqtt, hass):
+        """Device announce fires callback with UUID, not friendly name."""
+        from types import MappingProxyType
+
+        from homeassistant import config_entries
+        from homeassistant.helpers import device_registry as dr
+
+        entry = config_entries.ConfigEntry(
+            data={},
+            discovery_keys=MappingProxyType({}),
+            domain="mqtt",
+            minor_version=1,
+            options={},
+            source="test",
+            subentries_data={},
+            title="MQTT",
+            unique_id="mqtt_uuid_announce_test",
+            version=1,
+        )
+        entry.hass = hass
+        hass.config_entries._entries[entry.entry_id] = entry
+
+        device_reg = dr.async_get(hass)
+        device = device_reg.async_get_or_create(
+            config_entry_id=entry.entry_id,
+            identifiers={("mqtt", "zigbee2mqtt_0x001")},
+            name="Hall TRV",
+            manufacturer="Danfoss",
+            model="Ally thermostat",
+        )
+
+        backend = Z2MBackend(hass, base_topic="zigbee2mqtt")
+
+        # Capture bridge event handler
+        bridge_handler = None
+        trv_handler = None
+
+        async def capture_subscribe(ha, topic, callback):
+            nonlocal bridge_handler, trv_handler
+            if "bridge/event" in topic:
+                bridge_handler = callback
+            else:
+                trv_handler = callback
+            return MagicMock()
+
+        mock_mqtt.async_subscribe = capture_subscribe
+        mock_mqtt.async_publish = AsyncMock()
+
+        await backend.async_setup()
+        await backend.async_subscribe_trv(device.id)
+
+        # Register announce callback
+        announced = []
+        backend.register_announce_callback(lambda tid: announced.append(tid))
+
+        # Simulate device announce with friendly name
+        msg = MagicMock()
+        msg.payload = json.dumps(
+            {
+                "type": "device_announce",
+                "data": {"friendly_name": "Hall TRV"},
+            }
+        )
+        bridge_handler(msg)
+
+        # Should fire with UUID, not friendly name
+        assert len(announced) == 1
+        assert announced[0] == device.id
+
+    @patch("custom_components.danfoss_ally_gateway.backend.z2m.mqtt")
+    async def test_state_callback_fires_with_uuid(self, mock_mqtt, hass):
+        """State update callbacks receive UUID as trv_id, not friendly name."""
+        from types import MappingProxyType
+
+        from homeassistant import config_entries
+        from homeassistant.helpers import device_registry as dr
+
+        entry = config_entries.ConfigEntry(
+            data={},
+            discovery_keys=MappingProxyType({}),
+            domain="mqtt",
+            minor_version=1,
+            options={},
+            source="test",
+            subentries_data={},
+            title="MQTT",
+            unique_id="mqtt_uuid_state_test",
+            version=1,
+        )
+        entry.hass = hass
+        hass.config_entries._entries[entry.entry_id] = entry
+
+        device_reg = dr.async_get(hass)
+        device = device_reg.async_get_or_create(
+            config_entry_id=entry.entry_id,
+            identifiers={("mqtt", "zigbee2mqtt_0x001")},
+            name="Office TRV",
+            manufacturer="Danfoss",
+            model="Ally thermostat",
+        )
+
+        backend = Z2MBackend(hass, base_topic="zigbee2mqtt")
+
+        handler = None
+
+        async def capture_subscribe(ha, topic, callback):
+            nonlocal handler
+            if "bridge" not in topic:
+                handler = callback
+            return MagicMock()
+
+        mock_mqtt.async_subscribe = capture_subscribe
+        mock_mqtt.async_publish = AsyncMock()
+
+        received = []
+        backend.register_state_callback(lambda tid, s: received.append((tid, s)))
+
+        await backend.async_subscribe_trv(device.id)
+
+        # Simulate MQTT message
+        msg = MagicMock()
+        msg.topic = "zigbee2mqtt/Office TRV"
+        msg.payload = json.dumps({Z2M_ATTR_LOCAL_TEMPERATURE: 20.0})
+        handler(msg)
+
+        # Callback should receive UUID, not friendly name
+        assert len(received) == 1
+        assert received[0][0] == device.id
+        assert received[0][1].entity_id == device.id

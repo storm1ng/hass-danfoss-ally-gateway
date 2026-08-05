@@ -22,6 +22,7 @@ from homeassistant.components.climate.const import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import ATTR_TEMPERATURE, UnitOfTemperature
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.entity_platform import (
     AddConfigEntryEntitiesCallback,
 )
@@ -150,8 +151,15 @@ class DanfossAllyRoomClimate(DanfossAllyEntityBase, ClimateEntity):
 
         # Per-TRV details
         trv_details = {}
+        hass = self.hass or self._coordinator.hass
+        device_reg = dr.async_get(hass) if hass else None
         for trv_id, trv_state in state.trv_states.items():
-            trv_details[trv_id] = {
+            display_name = trv_id
+            if device_reg is not None:
+                device = device_reg.async_get(trv_id)
+                if device and device.name:
+                    display_name = device.name_by_user or device.name
+            trv_details[display_name] = {
                 "local_temperature": trv_state.local_temperature,
                 "setpoint": trv_state.occupied_heating_setpoint,
                 "demand": trv_state.pi_heating_demand,

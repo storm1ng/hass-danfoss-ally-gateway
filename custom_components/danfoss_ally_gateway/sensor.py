@@ -16,6 +16,7 @@ from homeassistant.components.sensor import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import PERCENTAGE, EntityCategory
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.entity_platform import (
     AddConfigEntryEntitiesCallback,
 )
@@ -25,6 +26,18 @@ from .coordinator import RoomCoordinator
 from .entity import DanfossAllyEntityBase
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _trv_display_name(hass: HomeAssistant, trv_id: str) -> str:
+    """Resolve a TRV device registry UUID to a human-readable display name.
+
+    Falls back to the trv_id itself if the device is not found.
+    """
+    device_reg = dr.async_get(hass)
+    device = device_reg.async_get(trv_id)
+    if device is not None and device.name:
+        return device.name_by_user or device.name
+    return trv_id
 
 
 async def async_setup_entry(
@@ -54,13 +67,14 @@ def create_room_entities(
 
     # Per-TRV sensors
     for trv_id in coordinator.trv_ids:
+        display_name = _trv_display_name(coordinator.hass, trv_id)
         entities.extend(
             [
                 DanfossAllyHeatingDemand(
-                    coordinator, config_entry_id, subentry_id, trv_id
+                    coordinator, config_entry_id, subentry_id, trv_id, display_name
                 ),
                 DanfossAllyLoadEstimate(
-                    coordinator, config_entry_id, subentry_id, trv_id
+                    coordinator, config_entry_id, subentry_id, trv_id, display_name
                 ),
             ]
         )
@@ -89,6 +103,7 @@ class DanfossAllyHeatingDemand(DanfossAllyEntityBase, SensorEntity):
         config_entry_id: str,
         subentry_id: str,
         trv_id: str,
+        display_name: str = "",
     ) -> None:
         """Initialize heating demand sensor."""
         super().__init__(coordinator, config_entry_id, subentry_id)
@@ -96,7 +111,7 @@ class DanfossAllyHeatingDemand(DanfossAllyEntityBase, SensorEntity):
         self._attr_unique_id = (
             f"{DOMAIN}_{config_entry_id}_{subentry_id}_{trv_id}_heating_demand"
         )
-        self._attr_translation_placeholders = {"trv_name": trv_id}
+        self._attr_translation_placeholders = {"trv_name": display_name or trv_id}
 
     @property
     def native_value(self) -> int | None:
@@ -121,6 +136,7 @@ class DanfossAllyLoadEstimate(DanfossAllyEntityBase, SensorEntity):
         config_entry_id: str,
         subentry_id: str,
         trv_id: str,
+        display_name: str = "",
     ) -> None:
         """Initialize load estimate sensor."""
         super().__init__(coordinator, config_entry_id, subentry_id)
@@ -128,7 +144,7 @@ class DanfossAllyLoadEstimate(DanfossAllyEntityBase, SensorEntity):
         self._attr_unique_id = (
             f"{DOMAIN}_{config_entry_id}_{subentry_id}_{trv_id}_load_estimate"
         )
-        self._attr_translation_placeholders = {"trv_name": trv_id}
+        self._attr_translation_placeholders = {"trv_name": display_name or trv_id}
 
     @property
     def native_value(self) -> int | None:
