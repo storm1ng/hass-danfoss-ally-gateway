@@ -17,7 +17,8 @@ from homeassistant.const import (
     STATE_UNKNOWN,
 )
 from homeassistant.core import Event, EventStateChangedData, HomeAssistant, callback
-from homeassistant.helpers import device_registry as dr, entity_registry as er
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.event import async_track_state_change_event
 
@@ -200,9 +201,7 @@ class ZHABackend(DanfossBackend):
             self.hass, [entity_id], _handle_state_change
         )
         self._subscriptions[trv_id] = unsub
-        _LOGGER.debug(
-            "Subscribed to ZHA entity: %s (UUID: %s)", entity_id, trv_id
-        )
+        _LOGGER.debug("Subscribed to ZHA entity: %s (UUID: %s)", entity_id, trv_id)
 
         # Read initial state
         state = self.hass.states.get(entity_id)

@@ -583,11 +583,12 @@ class TestZHAUUIDResolution:
         mock_entity_entry.domain = "climate"
         mock_entity_entry.entity_id = "climate.living_room_trv"
 
-        with patch(
-            "custom_components.danfoss_ally_gateway.backend.zha.dr"
-        ) as mock_dr, patch(
-            "custom_components.danfoss_ally_gateway.backend.zha.er"
-        ) as mock_er_mod:
+        with (
+            patch("custom_components.danfoss_ally_gateway.backend.zha.dr") as mock_dr,
+            patch(
+                "custom_components.danfoss_ally_gateway.backend.zha.er"
+            ) as mock_er_mod,
+        ):
             mock_dev_reg = MagicMock()
             mock_dr.async_get.return_value = mock_dev_reg
             mock_dev_reg.async_get.return_value = mock_device
@@ -602,9 +603,7 @@ class TestZHAUUIDResolution:
 
     async def test_resolve_trv_identifier_no_device(self, backend, hass):
         """Returns None when device not found."""
-        with patch(
-            "custom_components.danfoss_ally_gateway.backend.zha.dr"
-        ) as mock_dr:
+        with patch("custom_components.danfoss_ally_gateway.backend.zha.dr") as mock_dr:
             mock_dev_reg = MagicMock()
             mock_dr.async_get.return_value = mock_dev_reg
             mock_dev_reg.async_get.return_value = None
@@ -621,11 +620,12 @@ class TestZHAUUIDResolution:
         mock_sensor_entry.domain = "sensor"
         mock_sensor_entry.entity_id = "sensor.some_sensor"
 
-        with patch(
-            "custom_components.danfoss_ally_gateway.backend.zha.dr"
-        ) as mock_dr, patch(
-            "custom_components.danfoss_ally_gateway.backend.zha.er"
-        ) as mock_er_mod:
+        with (
+            patch("custom_components.danfoss_ally_gateway.backend.zha.dr") as mock_dr,
+            patch(
+                "custom_components.danfoss_ally_gateway.backend.zha.er"
+            ) as mock_er_mod,
+        ):
             mock_dev_reg = MagicMock()
             mock_dr.async_get.return_value = mock_dev_reg
             mock_dev_reg.async_get.return_value = mock_device
@@ -652,11 +652,12 @@ class TestZHAUUIDResolution:
         mock_entity_entry_climate.domain = "climate"
         mock_entity_entry_climate.entity_id = "climate.trv1"
 
-        with patch(
-            "custom_components.danfoss_ally_gateway.backend.zha.dr"
-        ) as mock_dr, patch(
-            "custom_components.danfoss_ally_gateway.backend.zha.er"
-        ) as mock_er_mod:
+        with (
+            patch("custom_components.danfoss_ally_gateway.backend.zha.dr") as mock_dr,
+            patch(
+                "custom_components.danfoss_ally_gateway.backend.zha.er"
+            ) as mock_er_mod,
+        ):
             mock_dev_reg = MagicMock()
             mock_dr.async_get.return_value = mock_dev_reg
             mock_dev_reg.async_get.return_value = mock_device
