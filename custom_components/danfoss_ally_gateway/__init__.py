@@ -39,8 +39,8 @@ def _assign_room_area(
 ) -> None:
     """Assign a room's virtual device to an HA area."""
     dev_reg = dr.async_get(hass)
-    device = dev_reg.async_get_device(
-        identifiers={(DOMAIN, f"{entry_id}_{subentry_id}")}
+    device = dev_reg.async_get_device_by_identifier(
+        (DOMAIN, f"{entry_id}_{subentry_id}"), entry_id
     )
     if device is not None:
         dev_reg.async_update_device(device.id, area_id=area_id)

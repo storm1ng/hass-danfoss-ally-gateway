@@ -15,10 +15,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - homeassistant-version: "2026.6.0"
-            test-helper-version: "0.13.336"
+          - homeassistant-version: "2026.8.0"
+            test-helper-version: "0.13.354"
             extra-pins: "pycares>=5.0.0,<6.0.0"
-            label: "minimum (2026.6.0)"
+            label: "minimum (2026.8.0)"
           - homeassistant-version: ""
             test-helper-version: ""
             extra-pins: ""
