@@ -1102,9 +1102,12 @@ class TestLoadBalancing:
 
 
 class TestWindowCoordination:
-    """Tests for window open coordination."""
+    """Tests for window open coordination (spec AU417130778872en 3.3)."""
 
-    async def test_window_open_forces_others(self, hass, mock_backend, subentry_data):
+    async def test_window_open_forces_all_including_detector(
+        self, hass, mock_backend, subentry_data
+    ):
+        """Local detection on one TRV forces external open on ALL room TRVs."""
         coord = RoomCoordinator(hass, mock_backend, subentry_data)
         await coord.async_setup()
 
@@ -1112,10 +1115,12 @@ class TestWindowCoordination:
         mock_backend.fire_state_update("trv_1", state)
         await hass.async_block_till_done()
 
-        mock_backend.async_set_external_window_open.assert_called_once_with(
-            "trv_2", True
-        )
-        assert "trv_2" in coord._forced_window_open_trvs
+        calls = {
+            c[0][0]: c[0][1]
+            for c in mock_backend.async_set_external_window_open.call_args_list
+        }
+        assert calls == {"trv_1": True, "trv_2": True}
+        assert coord._forced_window_open_trvs == {"trv_1", "trv_2"}
         await coord.async_teardown()
 
     async def test_no_window_coordination_single_trv(
@@ -1134,7 +1139,7 @@ class TestWindowCoordination:
     async def test_state4_does_not_trigger_forcing(
         self, hass, mock_backend, subentry_data
     ):
-        """State 4 (external_open) should NOT force other TRVs."""
+        """State 4 (external_open) on an untracked TRV must not force others."""
         coord = RoomCoordinator(hass, mock_backend, subentry_data)
         await coord.async_setup()
 
@@ -1142,9 +1147,7 @@ class TestWindowCoordination:
         mock_backend.fire_state_update("trv_1", state)
         await hass.async_block_till_done()
 
-        # Should NOT force trv_2 — state 4 is not a local detection.
-        # The orphan recovery will clear trv_1 itself (which is correct),
-        # but trv_2 must never be forced.
+        # The orphan recovery clears trv_1 itself, but trv_2 must never be forced.
         for call in mock_backend.async_set_external_window_open.call_args_list:
             assert call[0][0] != "trv_2" or call[0][1] is not True
         assert "trv_2" not in coord._forced_window_open_trvs
@@ -1153,121 +1156,174 @@ class TestWindowCoordination:
     async def test_orphan_state4_cleared_after_restart(
         self, hass, mock_backend, subentry_data
     ):
-        """TRV in state 4 not in _forced_window_open_trvs gets cleared."""
+        """TRV in state 4 not tracked gets cleared (post-restart orphan)."""
         coord = RoomCoordinator(hass, mock_backend, subentry_data)
         await coord.async_setup()
 
-        # Simulate post-restart: _forced_window_open_trvs is empty,
-        # but TRV reports state 4 (orphan from previous session)
         assert len(coord._forced_window_open_trvs) == 0
 
         state = make_trv_state("trv_1", window_open_detection=WINDOW_OPEN_EXTERNAL_OPEN)
         mock_backend.fire_state_update("trv_1", state)
         await hass.async_block_till_done()
 
-        # Should clear the orphaned state
         mock_backend.async_set_external_window_open.assert_called_once_with(
             "trv_1", False
         )
         await coord.async_teardown()
 
-    async def test_state4_tracked_trv_not_cleared(
+    async def test_state4_tracked_trv_not_cleared_as_orphan(
         self, hass, mock_backend, subentry_data
     ):
-        """TRV in state 4 that IS tracked should not be cleared as orphan."""
+        """A tracked TRV reporting state 4 is not cleared as an orphan."""
         coord = RoomCoordinator(hass, mock_backend, subentry_data)
         await coord.async_setup()
 
-        # Simulate: trv_1 detected window open, trv_2 was forced
-        coord._forced_window_open_trvs.add("trv_1")
+        # trv_1 and trv_2 forced; only trv_1 has confirmed state 4 so far.
+        coord._forced_window_open_trvs.update({"trv_1", "trv_2"})
+        coord.state.trv_states["trv_2"] = make_trv_state(
+            "trv_2", window_open_detection=WINDOW_OPEN_DETECTED
+        )
 
         state = make_trv_state("trv_1", window_open_detection=WINDOW_OPEN_EXTERNAL_OPEN)
+        coord.state.trv_states["trv_1"] = state
         mock_backend.fire_state_update("trv_1", state)
         await hass.async_block_till_done()
 
-        # Should NOT clear — it's tracked, not an orphan
+        # Not all forced TRVs are at state 4 yet (trv_2 still at 3) -> no clear.
         mock_backend.async_set_external_window_open.assert_not_called()
+        assert coord._forced_window_open_trvs == {"trv_1", "trv_2"}
         await coord.async_teardown()
 
-    async def test_deactivation_ignores_state4_in_still_open_check(
+    async def test_clears_when_all_forced_report_state4(
         self, hass, mock_backend, subentry_data
     ):
-        """State 4 on non-forced TRVs should not block deactivation."""
-        coord = RoomCoordinator(hass, mock_backend, subentry_data)
-        await coord.async_setup()
+        """Regression: non-detecting TRV is cleared once the room is closed.
 
-        # Set up: trv_2 was forced, and has confirmed state 4
-        coord._forced_window_open_trvs.add("trv_2")
-        coord.state.trv_states["trv_2"] = make_trv_state(
-            "trv_2", window_open_detection=WINDOW_OPEN_EXTERNAL_OPEN
-        )
-
-        # trv_1 (the detector) now reports state 1 (closed)
-        state = make_trv_state("trv_1", window_open_detection=1)
-        mock_backend.fire_state_update("trv_1", state)
-        await hass.async_block_till_done()
-
-        # Should deactivate trv_2
-        mock_backend.async_set_external_window_open.assert_called_once_with(
-            "trv_2", False
-        )
-        assert len(coord._forced_window_open_trvs) == 0
-        await coord.async_teardown()
-
-    async def test_window_open_both_trvs_detect_no_deadlock(
-        self, hass, mock_backend, subentry_data
-    ):
-        """Both TRVs independently detect window open — no deadlock.
-
-        TRV_1 detects first (state 3), forcing TRV_2. Then TRV_2 also reports
-        state 3. The guard must prevent TRV_2 from forcing TRV_1 back, which
-        would deadlock (all TRVs in _forced, nobody can trigger deactivation).
+        Reproduces the reported bug: detector closes but the other TRV kept
+        external open. With all TRVs forced and all reporting state 4, every
+        TRV must be cleared.
         """
         coord = RoomCoordinator(hass, mock_backend, subentry_data)
         await coord.async_setup()
 
-        # 1. TRV_1 detects window open (state 3) → forces TRV_2
-        state = make_trv_state("trv_1", window_open_detection=WINDOW_OPEN_DETECTED)
-        mock_backend.fire_state_update("trv_1", state)
-        await hass.async_block_till_done()
-
-        assert "trv_2" in coord._forced_window_open_trvs
-        assert "trv_1" not in coord._forced_window_open_trvs
-        mock_backend.async_set_external_window_open.assert_called_once_with(
-            "trv_2", True
+        # 1. trv_1 detects -> both TRVs forced.
+        coord.state.trv_states["trv_1"] = make_trv_state(
+            "trv_1", window_open_detection=WINDOW_OPEN_DETECTED
         )
+        mock_backend.fire_state_update(
+            "trv_1",
+            make_trv_state("trv_1", window_open_detection=WINDOW_OPEN_DETECTED),
+        )
+        await hass.async_block_till_done()
+        assert coord._forced_window_open_trvs == {"trv_1", "trv_2"}
         mock_backend.async_set_external_window_open.reset_mock()
 
-        # 2. TRV_2 also reports state 3 — must NOT force TRV_1 back
-        state = make_trv_state("trv_2", window_open_detection=WINDOW_OPEN_DETECTED)
-        mock_backend.fire_state_update("trv_2", state)
-        await hass.async_block_till_done()
-
-        assert "trv_1" not in coord._forced_window_open_trvs
-        mock_backend.async_set_external_window_open.assert_not_called()
-
-        # 3. TRV_2 acknowledges external open (state 4) — tracked, no orphan clear
+        # 2. trv_2 immediately reports state 4 (locally closed, externally open).
         coord.state.trv_states["trv_2"] = make_trv_state(
             "trv_2", window_open_detection=WINDOW_OPEN_EXTERNAL_OPEN
         )
-        state = make_trv_state("trv_2", window_open_detection=WINDOW_OPEN_EXTERNAL_OPEN)
-        mock_backend.fire_state_update("trv_2", state)
+        mock_backend.fire_state_update(
+            "trv_2",
+            make_trv_state("trv_2", window_open_detection=WINDOW_OPEN_EXTERNAL_OPEN),
+        )
+        await hass.async_block_till_done()
+        # trv_1 still at state 3 -> not all confirmed -> no clear yet.
+        mock_backend.async_set_external_window_open.assert_not_called()
+
+        # 3. Window closes: trv_1 goes 3 -> 4 -> deactivation clears ALL TRVs.
+        state1 = make_trv_state(
+            "trv_1", window_open_detection=WINDOW_OPEN_EXTERNAL_OPEN
+        )
+        coord.state.trv_states["trv_1"] = state1
+        mock_backend.fire_state_update("trv_1", state1)
+        await hass.async_block_till_done()
+
+        cleared = {
+            c[0][0]: c[0][1]
+            for c in mock_backend.async_set_external_window_open.call_args_list
+        }
+        assert cleared == {"trv_1": False, "trv_2": False}
+        assert len(coord._forced_window_open_trvs) == 0
+        await coord.async_teardown()
+
+    async def test_multi_detector_waits_for_all_to_close(
+        self, hass, mock_backend, subentry_data
+    ):
+        """With two detectors, clearing waits until BOTH report state 4."""
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        await coord.async_setup()
+
+        # Both TRVs detect open; first activation forces all.
+        coord.state.trv_states["trv_1"] = make_trv_state(
+            "trv_1", window_open_detection=WINDOW_OPEN_DETECTED
+        )
+        mock_backend.fire_state_update(
+            "trv_1",
+            make_trv_state("trv_1", window_open_detection=WINDOW_OPEN_DETECTED),
+        )
+        await hass.async_block_till_done()
+        coord.state.trv_states["trv_2"] = make_trv_state(
+            "trv_2", window_open_detection=WINDOW_OPEN_DETECTED
+        )
+        mock_backend.fire_state_update(
+            "trv_2",
+            make_trv_state("trv_2", window_open_detection=WINDOW_OPEN_DETECTED),
+        )
+        await hass.async_block_till_done()
+        assert coord._forced_window_open_trvs == {"trv_1", "trv_2"}
+        mock_backend.async_set_external_window_open.reset_mock()
+
+        # trv_1's window closes first -> state 4, but trv_2 still open (state 3).
+        state1 = make_trv_state(
+            "trv_1", window_open_detection=WINDOW_OPEN_EXTERNAL_OPEN
+        )
+        coord.state.trv_states["trv_1"] = state1
+        mock_backend.fire_state_update("trv_1", state1)
+        await hass.async_block_till_done()
+        mock_backend.async_set_external_window_open.assert_not_called()
+
+        # trv_2's window closes too -> both at state 4 -> clear all.
+        state2 = make_trv_state(
+            "trv_2", window_open_detection=WINDOW_OPEN_EXTERNAL_OPEN
+        )
+        coord.state.trv_states["trv_2"] = state2
+        mock_backend.fire_state_update("trv_2", state2)
+        await hass.async_block_till_done()
+
+        cleared = {
+            c[0][0]: c[0][1]
+            for c in mock_backend.async_set_external_window_open.call_args_list
+        }
+        assert cleared == {"trv_1": False, "trv_2": False}
+        assert len(coord._forced_window_open_trvs) == 0
+        await coord.async_teardown()
+
+    async def test_second_detector_reporting_state3_is_noop(
+        self, hass, mock_backend, subentry_data
+    ):
+        """A second TRV reporting state 3 after activation does not re-force."""
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        await coord.async_setup()
+
+        coord.state.trv_states["trv_1"] = make_trv_state(
+            "trv_1", window_open_detection=WINDOW_OPEN_DETECTED
+        )
+        mock_backend.fire_state_update(
+            "trv_1",
+            make_trv_state("trv_1", window_open_detection=WINDOW_OPEN_DETECTED),
+        )
+        await hass.async_block_till_done()
+        assert coord._forced_window_open_trvs == {"trv_1", "trv_2"}
+        mock_backend.async_set_external_window_open.reset_mock()
+
+        mock_backend.fire_state_update(
+            "trv_2",
+            make_trv_state("trv_2", window_open_detection=WINDOW_OPEN_DETECTED),
+        )
         await hass.async_block_till_done()
 
         mock_backend.async_set_external_window_open.assert_not_called()
-
-        # 4. Window closes — TRV_1 goes to state 1 → deactivation fires
-        coord.state.trv_states["trv_1"] = make_trv_state(
-            "trv_1", window_open_detection=1
-        )
-        state = make_trv_state("trv_1", window_open_detection=1)
-        mock_backend.fire_state_update("trv_1", state)
-        await hass.async_block_till_done()
-
-        mock_backend.async_set_external_window_open.assert_called_once_with(
-            "trv_2", False
-        )
-        assert len(coord._forced_window_open_trvs) == 0
+        assert coord._forced_window_open_trvs == {"trv_1", "trv_2"}
         await coord.async_teardown()
 
 
