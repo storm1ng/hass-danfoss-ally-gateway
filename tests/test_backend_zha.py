@@ -1,0 +1,1138 @@
+"""Tests for the ZHA backend."""
+
+from __future__ import annotations
+
+from typing import Any
+from unittest import mock
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+from homeassistant.const import STATE_UNAVAILABLE
+
+from custom_components.danfoss_ally_gateway.backend import TRVState
+from custom_components.danfoss_ally_gateway.backend.zha import ZHABackend
+from custom_components.danfoss_ally_gateway.const import (
+    ATTR_EXTERNAL_MEASURED_ROOM_SENSOR,
+    ATTR_EXTERNAL_WINDOW_OPEN,
+    ATTR_HEAT_AVAILABLE,
+    ATTR_LOAD_BALANCING_ENABLE,
+    ATTR_LOAD_ROOM_MEAN,
+    ATTR_OCCUPIED_HEATING_SETPOINT,
+    ATTR_THERMOSTAT_PROGRAMMING_MODE,
+    CLUSTER_THERMOSTAT,
+    CLUSTER_TIME,
+    CMD_PREHEAT_COMMAND,
+    DANFOSS_MANUFACTURER_CODE,
+    EXTERNAL_TEMP_DISABLED,
+)
+
+# ── Helpers ───────────────────────────────────────────────────────────
+
+
+def _make_state(
+    state: str = "heat",
+    attributes: dict[str, Any] | None = None,
+) -> MagicMock:
+    """Create a mock HA State object."""
+    mock = MagicMock()
+    mock.state = state
+    mock.attributes = attributes or {}
+    return mock
+
+
+def _mock_entity_registry_entry(unique_id: str = "00:11:22:33:44:55:66:77-1"):
+    """Create a mock entity registry entry."""
+    entry = MagicMock()
+    entry.unique_id = unique_id
+    return entry
+
+
+# ── State Parsing ─────────────────────────────────────────────────────
+
+
+class TestZHAStateParsing:
+    """Tests for ZHA state parsing.
+
+    ``_parse_zha_state`` only extracts fields available from HA climate
+    entity state attributes.  Danfoss-specific attributes are populated
+    separately via ``_merge_cluster_attrs_into_state``.
+    """
+
+    def test_parse_ha_state_fields(self):
+        attrs = {
+            "current_temperature": 21.0,
+            "temperature": 22.0,
+            "pi_heating_demand": 40,
+        }
+        state = _make_state(attributes=attrs)
+        trv_state = ZHABackend._parse_zha_state("climate.trv1", state)
+
+        assert trv_state.entity_id == "climate.trv1"
+        assert trv_state.local_temperature == 21.0
+        assert trv_state.occupied_heating_setpoint == 22.0
+        assert trv_state.pi_heating_demand == 40
+        # Danfoss-specific fields should remain None
+        assert trv_state.load_estimate is None
+        assert trv_state.heat_available is None
+        assert trv_state.window_open_detection is None
+        assert trv_state.setpoint_change_source is None
+
+    def test_parse_minimal_state(self):
+        state = _make_state(attributes={"current_temperature": 20.0})
+        trv_state = ZHABackend._parse_zha_state("climate.trv1", state)
+        assert trv_state.local_temperature == 20.0
+        assert trv_state.occupied_heating_setpoint is None
+        assert trv_state.pi_heating_demand is None
+
+    def test_parse_empty_state(self):
+        state = _make_state(attributes={})
+        trv_state = ZHABackend._parse_zha_state("climate.trv1", state)
+        assert trv_state.entity_id == "climate.trv1"
+        assert trv_state.local_temperature is None
+
+    def test_raw_preserved(self):
+        attrs = {"current_temperature": 19.0, "custom_field": "test"}
+        state = _make_state(attributes=attrs)
+        trv_state = ZHABackend._parse_zha_state("climate.trv1", state)
+        assert trv_state.raw["custom_field"] == "test"
+
+
+# ── Cluster Attribute Merging & Normalization ─────────────────────────
+
+
+class TestClusterAttrMerging:
+    """Tests for _merge_cluster_attrs_into_state and value normalization."""
+
+    def test_merge_danfoss_attrs(self):
+        trv_state = TRVState(entity_id="climate.trv1")
+        cluster_attrs = {
+            "open_window_detection": 3,
+            "external_open_window_detected": True,
+            "heat_required": True,
+            "heat_available": False,
+            "load_estimate": 80,
+            "load_balancing_enable": True,
+            "preheat_status": False,
+            "preheat_time": 1700000000,
+            "setpoint_change_source": 1,
+            "radiator_covered": False,
+        }
+        result = ZHABackend._merge_cluster_attrs_into_state(trv_state, cluster_attrs)
+
+        assert result.window_open_detection == 3
+        assert result.external_window_open is True
+        assert result.heat_required is True
+        assert result.heat_available is False
+        assert result.load_estimate == 80
+        assert result.load_balancing_enable is True
+        assert result.preheat_status is False
+        assert result.preheat_time == 1700000000
+        assert result.setpoint_change_source == 1
+        assert result.radiator_covered is False
+
+    def test_merge_normalizes_enum_to_int(self):
+        """Zigpy enum types (with int base) should be normalized to plain int."""
+        trv_state = TRVState(entity_id="climate.trv1")
+
+        # Simulate zigpy enum value (enum with int base)
+        class FakeEnum(int):
+            pass
+
+        enum_val = FakeEnum(3)
+        cluster_attrs = {"open_window_detection": enum_val}
+        result = ZHABackend._merge_cluster_attrs_into_state(trv_state, cluster_attrs)
+        assert result.window_open_detection == 3
+        assert isinstance(result.window_open_detection, int)
+
+    def test_merge_normalizes_none_values(self):
+        trv_state = TRVState(entity_id="climate.trv1")
+        cluster_attrs = {
+            "heat_required": None,
+            "load_estimate": None,
+        }
+        result = ZHABackend._merge_cluster_attrs_into_state(trv_state, cluster_attrs)
+        assert result.heat_required is None
+        assert result.load_estimate is None
+
+    def test_merge_unknown_attrs_ignored(self):
+        trv_state = TRVState(entity_id="climate.trv1", local_temperature=21.0)
+        cluster_attrs = {"unknown_attr": 42}
+        result = ZHABackend._merge_cluster_attrs_into_state(trv_state, cluster_attrs)
+        assert result.local_temperature == 21.0  # unchanged
+
+    def test_merge_updates_raw(self):
+        trv_state = TRVState(entity_id="climate.trv1")
+        cluster_attrs = {"heat_required": True}
+        result = ZHABackend._merge_cluster_attrs_into_state(trv_state, cluster_attrs)
+        assert result.raw["heat_required"] is True
+
+    def test_merge_preserves_existing_fields(self):
+        """Merging cluster attrs should not overwrite HA state fields."""
+        trv_state = TRVState(
+            entity_id="climate.trv1",
+            local_temperature=21.0,
+            occupied_heating_setpoint=22.0,
+        )
+        cluster_attrs = {"load_estimate": 80}
+        result = ZHABackend._merge_cluster_attrs_into_state(trv_state, cluster_attrs)
+        assert result.local_temperature == 21.0
+        assert result.occupied_heating_setpoint == 22.0
+        assert result.load_estimate == 80
+
+
+# ── Lifecycle ─────────────────────────────────────────────────────────
+
+
+class TestZHALifecycle:
+    """Tests for ZHA backend setup and teardown."""
+
+    @pytest.fixture
+    def backend(self, hass):
+        return ZHABackend(hass)
+
+    async def test_setup(self, backend):
+        await backend.async_setup()
+        await backend.async_teardown()
+
+    async def test_teardown_clears_state(self, backend):
+        backend._trv_states["trv1"] = TRVState(entity_id="trv1")
+        await backend.async_teardown()
+        assert len(backend._trv_states) == 0
+        assert len(backend._subscriptions) == 0
+
+    async def test_setup_starts_poll_timer(self, backend):
+        await backend.async_setup()
+        assert backend._unsub_poll is not None
+        await backend.async_teardown()
+
+    async def test_teardown_cancels_poll_timer(self, backend):
+        await backend.async_setup()
+        assert backend._unsub_poll is not None
+        await backend.async_teardown()
+        assert backend._unsub_poll is None
+
+
+# ── Danfoss Attribute Polling ─────────────────────────────────────────
+
+
+class TestDanfossPolling:
+    """Tests for Danfoss-specific cluster attribute polling."""
+
+    @pytest.fixture
+    def backend(self, hass):
+        return ZHABackend(hass)
+
+    async def test_poll_merges_into_existing_state(self, backend):
+        """Polling merges cluster attrs into existing cached state."""
+        # Pre-populate with HA state
+        backend._trv_states["trv1"] = TRVState(
+            entity_id="trv1",
+            local_temperature=21.0,
+            occupied_heating_setpoint=22.0,
+        )
+
+        mock_cluster = MagicMock()
+        mock_cluster.read_attributes = AsyncMock(
+            return_value=(
+                {"heat_required": True, "load_estimate": 80, "preheat_status": False},
+                {},
+            )
+        )
+
+        with patch.object(backend, "_get_zigpy_cluster", return_value=mock_cluster):
+            await backend._async_poll_danfoss_attributes("trv1")
+
+        state = backend._trv_states["trv1"]
+        # HA state fields preserved
+        assert state.local_temperature == 21.0
+        assert state.occupied_heating_setpoint == 22.0
+        # Cluster fields merged
+        assert state.heat_required is True
+        assert state.load_estimate == 80
+        assert state.preheat_status is False
+
+    async def test_poll_creates_state_if_none(self, backend):
+        """Polling creates a TRVState if none is cached yet."""
+        mock_cluster = MagicMock()
+        mock_cluster.read_attributes = AsyncMock(
+            return_value=({"heat_required": True}, {})
+        )
+
+        with patch.object(backend, "_get_zigpy_cluster", return_value=mock_cluster):
+            await backend._async_poll_danfoss_attributes("trv1")
+
+        state = backend._trv_states["trv1"]
+        assert state.heat_required is True
+
+    async def test_poll_fires_state_update(self, backend):
+        """Polling fires a state update callback."""
+        cb = MagicMock()
+        backend.register_state_callback(cb)
+
+        mock_cluster = MagicMock()
+        mock_cluster.read_attributes = AsyncMock(
+            return_value=({"heat_required": True}, {})
+        )
+
+        with patch.object(backend, "_get_zigpy_cluster", return_value=mock_cluster):
+            await backend._async_poll_danfoss_attributes("trv1")
+
+        cb.assert_called_once()
+        assert cb.call_args[0][0] == "trv1"
+
+    async def test_poll_handles_cluster_not_found(self, backend):
+        """Polling gracefully handles missing cluster."""
+        with patch.object(backend, "_get_zigpy_cluster", return_value=None):
+            await backend._async_poll_danfoss_attributes("trv1")
+
+        assert "trv1" not in backend._trv_states
+
+    async def test_poll_handles_read_exception(self, backend):
+        """Polling gracefully handles read exceptions."""
+        mock_cluster = MagicMock()
+        mock_cluster.read_attributes = AsyncMock(side_effect=RuntimeError("Zigbee err"))
+
+        with patch.object(backend, "_get_zigpy_cluster", return_value=mock_cluster):
+            await backend._async_poll_danfoss_attributes("trv1")
+
+        assert "trv1" not in backend._trv_states
+
+    async def test_poll_handles_partial_failure(self, backend):
+        """Polling still processes successful reads on partial failure."""
+        backend._trv_states["trv1"] = TRVState(entity_id="trv1")
+
+        mock_cluster = MagicMock()
+        mock_cluster.read_attributes = AsyncMock(
+            return_value=(
+                {"heat_required": True},
+                {"load_estimate": Exception("timeout")},
+            )
+        )
+
+        with patch.object(backend, "_get_zigpy_cluster", return_value=mock_cluster):
+            await backend._async_poll_danfoss_attributes("trv1")
+
+        state = backend._trv_states["trv1"]
+        assert state.heat_required is True
+        assert state.load_estimate is None  # failed read
+
+    async def test_poll_all_iterates_subscriptions(self, backend):
+        """_async_poll_all_trvs polls each subscribed TRV."""
+        backend._subscriptions = {"trv1": MagicMock(), "trv2": MagicMock()}
+        polled = []
+
+        async def _mock_poll(trv_id):
+            polled.append(trv_id)
+
+        with patch.object(
+            backend, "_async_poll_danfoss_attributes", side_effect=_mock_poll
+        ):
+            await backend._async_poll_all_trvs()
+
+        assert set(polled) == {"trv1", "trv2"}
+
+
+# ── State Change Merging ─────────────────────────────────────────────
+
+
+class TestStateChangeMerging:
+    """Tests for HA state change preserving cluster-polled fields."""
+
+    @pytest.fixture
+    def backend(self, hass):
+        return ZHABackend(hass)
+
+    @patch(
+        "custom_components.danfoss_ally_gateway.backend.zha.async_track_state_change_event"
+    )
+    async def test_state_change_preserves_polled_fields(
+        self, mock_track, backend, hass
+    ):
+        """HA state change merges into existing state, preserving polled fields."""
+        mock_track.return_value = MagicMock()
+        hass.states = MagicMock()
+        hass.states.get.return_value = None
+
+        await backend.async_subscribe_trv("climate.trv1")
+
+        # Simulate polled Danfoss attrs already cached
+        backend._trv_states["climate.trv1"] = TRVState(
+            entity_id="climate.trv1",
+            heat_required=True,
+            load_estimate=80,
+            window_open_detection=3,
+        )
+
+        # Simulate HA state change
+        state_change_handler = mock_track.call_args[0][2]
+        new_state = _make_state(
+            attributes={
+                "current_temperature": 21.5,
+                "temperature": 23.0,
+                "pi_heating_demand": 50,
+            }
+        )
+        event = MagicMock()
+        event.data = {"new_state": new_state}
+        state_change_handler(event)
+
+        state = backend._trv_states["climate.trv1"]
+        # HA fields updated
+        assert state.local_temperature == 21.5
+        assert state.occupied_heating_setpoint == 23.0
+        assert state.pi_heating_demand == 50
+        # Polled fields preserved
+        assert state.heat_required is True
+        assert state.load_estimate == 80
+        assert state.window_open_detection == 3
+
+
+# ── Cluster Event Subscription ───────────────────────────────────────
+
+
+class TestClusterEventSubscription:
+    """Tests for real-time zigpy cluster attribute report event handling."""
+
+    @pytest.fixture
+    def backend(self, hass):
+        return ZHABackend(hass)
+
+    def test_subscribe_cluster_events(self, backend):
+        """Subscribes to cluster attribute_updated events."""
+        mock_cluster = MagicMock()
+        mock_cluster.on_event.return_value = MagicMock()  # unsub callable
+
+        with patch.object(backend, "_get_zigpy_cluster", return_value=mock_cluster):
+            backend._subscribe_cluster_events("trv1")
+
+        mock_cluster.on_event.assert_called_once_with("attribute_updated", mock.ANY)
+        assert "trv1" in backend._cluster_unsubs
+
+    def test_subscribe_cluster_events_no_cluster(self, backend):
+        """Gracefully handles missing cluster."""
+        with patch.object(backend, "_get_zigpy_cluster", return_value=None):
+            backend._subscribe_cluster_events("trv1")
+
+        assert "trv1" not in backend._cluster_unsubs
+
+    def test_subscribe_cluster_events_idempotent(self, backend):
+        """Second subscribe call for same TRV is a no-op."""
+        mock_cluster = MagicMock()
+        mock_cluster.on_event.return_value = MagicMock()
+
+        with patch.object(backend, "_get_zigpy_cluster", return_value=mock_cluster):
+            backend._subscribe_cluster_events("trv1")
+            backend._subscribe_cluster_events("trv1")
+
+        assert mock_cluster.on_event.call_count == 1
+
+    def test_cluster_event_updates_state(self, backend):
+        """Cluster attribute_updated event merges into cached state."""
+        backend._trv_states["trv1"] = TRVState(
+            entity_id="trv1",
+            local_temperature=21.0,
+        )
+        cb = MagicMock()
+        backend.register_state_callback(cb)
+
+        mock_cluster = MagicMock()
+        captured_handler = None
+
+        def capture_on_event(event_name, handler):
+            nonlocal captured_handler
+            captured_handler = handler
+            return MagicMock()
+
+        mock_cluster.on_event.side_effect = capture_on_event
+
+        with patch.object(backend, "_get_zigpy_cluster", return_value=mock_cluster):
+            backend._subscribe_cluster_events("trv1")
+
+        # Simulate a cluster attribute report
+        event = MagicMock()
+        event.attribute_name = "open_window_detection"
+        event.value = 3
+        captured_handler(event)
+
+        state = backend._trv_states["trv1"]
+        assert state.window_open_detection == 3
+        assert state.local_temperature == 21.0  # preserved
+        cb.assert_called_once()
+
+    def test_cluster_event_unknown_attr_ignored(self, backend):
+        """Unknown attribute names from cluster events are ignored."""
+        backend._trv_states["trv1"] = TRVState(entity_id="trv1")
+        cb = MagicMock()
+        backend.register_state_callback(cb)
+
+        mock_cluster = MagicMock()
+        captured_handler = None
+
+        def capture_on_event(event_name, handler):
+            nonlocal captured_handler
+            captured_handler = handler
+            return MagicMock()
+
+        mock_cluster.on_event.side_effect = capture_on_event
+
+        with patch.object(backend, "_get_zigpy_cluster", return_value=mock_cluster):
+            backend._subscribe_cluster_events("trv1")
+
+        event = MagicMock()
+        event.attribute_name = "some_unknown_attr"
+        event.value = 42
+        captured_handler(event)
+
+        # No state update should have been fired
+        cb.assert_not_called()
+
+    def test_cluster_event_creates_state_if_missing(self, backend):
+        """Cluster event creates TRVState if none cached yet."""
+        mock_cluster = MagicMock()
+        captured_handler = None
+
+        def capture_on_event(event_name, handler):
+            nonlocal captured_handler
+            captured_handler = handler
+            return MagicMock()
+
+        mock_cluster.on_event.side_effect = capture_on_event
+
+        with patch.object(backend, "_get_zigpy_cluster", return_value=mock_cluster):
+            backend._subscribe_cluster_events("trv1")
+
+        event = MagicMock()
+        event.attribute_name = "heat_required"
+        event.value = True
+        captured_handler(event)
+
+        assert "trv1" in backend._trv_states
+        assert backend._trv_states["trv1"].heat_required is True
+
+    def test_cluster_event_normalizes_enum(self, backend):
+        """Cluster event values are normalized via CLUSTER_ATTR_TO_TRV_STATE."""
+        backend._trv_states["trv1"] = TRVState(entity_id="trv1")
+
+        mock_cluster = MagicMock()
+        captured_handler = None
+
+        def capture_on_event(event_name, handler):
+            nonlocal captured_handler
+            captured_handler = handler
+            return MagicMock()
+
+        mock_cluster.on_event.side_effect = capture_on_event
+
+        with patch.object(backend, "_get_zigpy_cluster", return_value=mock_cluster):
+            backend._subscribe_cluster_events("trv1")
+
+        # Simulate zigpy enum value
+        class FakeEnum(int):
+            pass
+
+        event = MagicMock()
+        event.attribute_name = "open_window_detection"
+        event.value = FakeEnum(3)
+        captured_handler(event)
+
+        assert backend._trv_states["trv1"].window_open_detection == 3
+        assert isinstance(backend._trv_states["trv1"].window_open_detection, int)
+
+    async def test_unsubscribe_cleans_up_cluster_unsub(self, backend):
+        """async_unsubscribe_trv calls the cluster event unsub."""
+        mock_unsub = MagicMock()
+        backend._cluster_unsubs["trv1"] = mock_unsub
+        backend._subscriptions["trv1"] = MagicMock()
+
+        await backend.async_unsubscribe_trv("trv1")
+
+        mock_unsub.assert_called_once()
+        assert "trv1" not in backend._cluster_unsubs
+
+    async def test_teardown_clears_cluster_unsubs(self, backend):
+        """async_teardown clears all cluster unsubs."""
+        backend._cluster_unsubs["trv1"] = MagicMock()
+        backend._cluster_unsubs["trv2"] = MagicMock()
+
+        await backend.async_teardown()
+
+        assert len(backend._cluster_unsubs) == 0
+
+
+# ── Subscriptions ─────────────────────────────────────────────────────
+
+
+class TestZHASubscriptions:
+    """Tests for ZHA entity state subscription."""
+
+    @pytest.fixture
+    def backend(self, hass):
+        return ZHABackend(hass)
+
+    @patch(
+        "custom_components.danfoss_ally_gateway.backend.zha.async_track_state_change_event"
+    )
+    async def test_subscribe_trv(self, mock_track, backend, hass):
+        mock_unsub = MagicMock()
+        mock_track.return_value = mock_unsub
+        hass.states = MagicMock()
+        hass.states.get.return_value = None
+
+        await backend.async_subscribe_trv("climate.trv1")
+
+        mock_track.assert_called_once()
+        assert "climate.trv1" in backend._subscriptions
+
+    @patch(
+        "custom_components.danfoss_ally_gateway.backend.zha.async_track_state_change_event"
+    )
+    async def test_subscribe_duplicate_ignored(self, mock_track, backend, hass):
+        mock_track.return_value = MagicMock()
+        hass.states = MagicMock()
+        hass.states.get.return_value = None
+
+        await backend.async_subscribe_trv("climate.trv1")
+        await backend.async_subscribe_trv("climate.trv1")
+
+        assert mock_track.call_count == 1
+
+    @patch(
+        "custom_components.danfoss_ally_gateway.backend.zha.async_track_state_change_event"
+    )
+    async def test_subscribe_reads_initial_state(self, mock_track, backend, hass):
+        mock_track.return_value = MagicMock()
+        mock_state = _make_state(
+            state="heat",
+            attributes={"current_temperature": 21.0, "temperature": 22.0},
+        )
+        hass.states = MagicMock()
+        hass.states.get.return_value = mock_state
+
+        await backend.async_subscribe_trv("climate.trv1")
+
+        cached = backend._trv_states.get("climate.trv1")
+        assert cached is not None
+        assert cached.local_temperature == 21.0
+
+    @patch(
+        "custom_components.danfoss_ally_gateway.backend.zha.async_track_state_change_event"
+    )
+    async def test_subscribe_skips_unavailable_initial(self, mock_track, backend, hass):
+        mock_track.return_value = MagicMock()
+        mock_state = _make_state(state=STATE_UNAVAILABLE)
+        hass.states = MagicMock()
+        hass.states.get.return_value = mock_state
+
+        await backend.async_subscribe_trv("climate.trv1")
+
+        assert "climate.trv1" not in backend._trv_states
+
+    @patch(
+        "custom_components.danfoss_ally_gateway.backend.zha.async_track_state_change_event"
+    )
+    async def test_unsubscribe(self, mock_track, backend, hass):
+        mock_unsub = MagicMock()
+        mock_track.return_value = mock_unsub
+        hass.states = MagicMock()
+        hass.states.get.return_value = None
+
+        await backend.async_subscribe_trv("climate.trv1")
+        await backend.async_unsubscribe_trv("climate.trv1")
+
+        mock_unsub.assert_called_once()
+        assert "climate.trv1" not in backend._subscriptions
+
+    async def test_get_trv_state_none(self, backend):
+        assert await backend.async_get_trv_state("climate.unknown") is None
+
+
+# ── Cluster Attribute Writes ──────────────────────────────────────────
+
+
+class TestZHAClusterWrites:
+    """Tests for ZHA cluster attribute write methods."""
+
+    @pytest.fixture
+    def backend(self, hass):
+        return ZHABackend(hass)
+
+    @pytest.fixture
+    def mock_er(self):
+        """Mock entity registry."""
+        with patch(
+            "custom_components.danfoss_ally_gateway.backend.zha.er"
+        ) as mock_er_mod:
+            mock_registry = MagicMock()
+            mock_er_mod.async_get.return_value = mock_registry
+            mock_registry.async_get.return_value = _mock_entity_registry_entry()
+            yield mock_registry
+
+    async def test_set_external_temperature(self, backend, hass, mock_er):
+        hass.services = MagicMock()
+        hass.services.async_call = AsyncMock()
+
+        await backend.async_set_external_temperature("climate.trv1", 21.5)
+
+        hass.services.async_call.assert_called_once()
+        call_args = hass.services.async_call.call_args
+        assert call_args[0][0] == "zha"
+        assert call_args[0][1] == "set_zigbee_cluster_attribute"
+        svc_data = call_args[0][2]
+        assert svc_data["cluster_id"] == CLUSTER_THERMOSTAT
+        assert svc_data["attribute"] == ATTR_EXTERNAL_MEASURED_ROOM_SENSOR
+        assert svc_data["value"] == 2150  # 21.5 * 100
+
+    async def test_set_external_temperature_disabled(self, backend, hass, mock_er):
+        hass.services = MagicMock()
+        hass.services.async_call = AsyncMock()
+
+        await backend.async_set_external_temperature("climate.trv1", -80.0)
+
+        svc_data = hass.services.async_call.call_args[0][2]
+        assert svc_data["value"] == EXTERNAL_TEMP_DISABLED
+
+    async def test_set_occupied_heating_setpoint(self, backend, hass, mock_er):
+        hass.services = MagicMock()
+        hass.services.async_call = AsyncMock()
+
+        await backend.async_set_occupied_heating_setpoint("climate.trv1", 22.0)
+
+        svc_data = hass.services.async_call.call_args[0][2]
+        assert svc_data["attribute"] == ATTR_OCCUPIED_HEATING_SETPOINT
+        assert svc_data["value"] == 2200  # 22.0 * 100
+        # Standard attribute - no manufacturer code
+        assert "manufacturer" not in svc_data or svc_data["manufacturer"] is None
+
+    async def test_set_heat_available_true(self, backend, hass, mock_er):
+        hass.services = MagicMock()
+        hass.services.async_call = AsyncMock()
+
+        await backend.async_set_heat_available("climate.trv1", True)
+
+        svc_data = hass.services.async_call.call_args[0][2]
+        assert svc_data["attribute"] == ATTR_HEAT_AVAILABLE
+        assert svc_data["value"] is True
+
+    async def test_set_heat_available_false(self, backend, hass, mock_er):
+        hass.services = MagicMock()
+        hass.services.async_call = AsyncMock()
+
+        await backend.async_set_heat_available("climate.trv1", False)
+
+        svc_data = hass.services.async_call.call_args[0][2]
+        assert svc_data["value"] is False
+
+    async def test_set_load_room_mean(self, backend, hass, mock_er):
+        hass.services = MagicMock()
+        hass.services.async_call = AsyncMock()
+
+        await backend.async_set_load_room_mean("climate.trv1", 150)
+
+        svc_data = hass.services.async_call.call_args[0][2]
+        assert svc_data["attribute"] == ATTR_LOAD_ROOM_MEAN
+        assert svc_data["value"] == 150
+
+    async def test_set_load_balancing_enable(self, backend, hass, mock_er):
+        hass.services = MagicMock()
+        hass.services.async_call = AsyncMock()
+
+        await backend.async_set_load_balancing_enable("climate.trv1", True)
+
+        svc_data = hass.services.async_call.call_args[0][2]
+        assert svc_data["attribute"] == ATTR_LOAD_BALANCING_ENABLE
+        assert svc_data["value"] is True
+
+    async def test_set_external_window_open(self, backend, hass, mock_er):
+        hass.services = MagicMock()
+        hass.services.async_call = AsyncMock()
+
+        await backend.async_set_external_window_open("climate.trv1", True)
+
+        svc_data = hass.services.async_call.call_args[0][2]
+        assert svc_data["attribute"] == ATTR_EXTERNAL_WINDOW_OPEN
+        assert svc_data["value"] is True
+
+    async def test_entity_not_found(self, backend, hass, mock_er):
+        """When entity not in registry, the write is skipped."""
+        hass.services = MagicMock()
+        hass.services.async_call = AsyncMock()
+        mock_er.async_get.return_value = None
+
+        await backend.async_set_external_temperature("climate.unknown", 21.0)
+
+        hass.services.async_call.assert_not_called()
+
+    async def test_ieee_extracted_from_unique_id(self, backend, hass, mock_er):
+        """IEEE address is extracted from unique_id format 'ieee-endpoint'."""
+        hass.services = MagicMock()
+        hass.services.async_call = AsyncMock()
+        mock_er.async_get.return_value = _mock_entity_registry_entry(
+            unique_id="00:11:22:33:44:55:66:77-1"
+        )
+
+        await backend.async_set_heat_available("climate.trv1", True)
+
+        svc_data = hass.services.async_call.call_args[0][2]
+        assert svc_data["ieee"] == "00:11:22:33:44:55:66:77"
+
+    async def test_manufacturer_code_for_danfoss_attrs(self, backend, hass, mock_er):
+        """Danfoss manufacturer-specific attributes include manufacturer code."""
+        hass.services = MagicMock()
+        hass.services.async_call = AsyncMock()
+
+        await backend.async_set_heat_available("climate.trv1", True)
+
+        svc_data = hass.services.async_call.call_args[0][2]
+        assert svc_data["manufacturer"] == DANFOSS_MANUFACTURER_CODE
+
+
+# ── Commands ──────────────────────────────────────────────────────────
+
+
+class TestZHACommands:
+    """Tests for ZHA command methods."""
+
+    @pytest.fixture
+    def backend(self, hass):
+        return ZHABackend(hass)
+
+    @pytest.fixture
+    def mock_er(self):
+        with patch(
+            "custom_components.danfoss_ally_gateway.backend.zha.er"
+        ) as mock_er_mod:
+            mock_registry = MagicMock()
+            mock_er_mod.async_get.return_value = mock_registry
+            mock_registry.async_get.return_value = _mock_entity_registry_entry()
+            yield mock_registry
+
+    async def test_send_setpoint_command(self, backend, hass, mock_er):
+        hass.services = MagicMock()
+        hass.services.async_call = AsyncMock()
+
+        await backend.async_send_setpoint_command("climate.trv1", 23.0, 0)
+
+        svc_data = hass.services.async_call.call_args[0][2]
+        assert svc_data["attribute"] == ATTR_OCCUPIED_HEATING_SETPOINT
+        assert svc_data["value"] == 2300
+
+    async def test_send_preheat_command(self, backend, hass, mock_er):
+        """Sends PreHeatCommand (0x42) via ZHA cluster command."""
+        hass.services = MagicMock()
+        hass.services.async_call = AsyncMock()
+
+        await backend.async_send_preheat_command("climate.trv1", 1700000000)
+
+        svc_data = hass.services.async_call.call_args[0][2]
+        assert svc_data["cluster_id"] == CLUSTER_THERMOSTAT
+        assert svc_data["command"] == CMD_PREHEAT_COMMAND
+        assert svc_data["args"] == [0x00, 1700000000]
+        assert svc_data["manufacturer"] == DANFOSS_MANUFACTURER_CODE
+
+    async def test_sync_time_writes_six_attrs(self, backend, hass, mock_er):
+        hass.services = MagicMock()
+        hass.services.async_call = AsyncMock()
+
+        await backend.async_sync_time("climate.trv1")
+
+        # Should write 6 time attributes
+        assert hass.services.async_call.call_count == 6
+
+        # Verify attribute IDs for all 6 calls
+        attr_ids = set()
+        for c in hass.services.async_call.call_args_list:
+            svc_data = c[0][2]
+            assert svc_data["cluster_id"] == CLUSTER_TIME
+            attr_ids.add(svc_data["attribute"])
+
+        expected = {0x0000, 0x0001, 0x0002, 0x0003, 0x0004, 0x0005}
+        assert attr_ids == expected
+
+    async def test_sync_time_no_manufacturer_code(self, backend, hass, mock_er):
+        """Time cluster attributes are standard (no manufacturer code)."""
+        hass.services = MagicMock()
+        hass.services.async_call = AsyncMock()
+
+        await backend.async_sync_time("climate.trv1")
+
+        for c in hass.services.async_call.call_args_list:
+            svc_data = c[0][2]
+            # manufacturer should be None or absent
+            assert (
+                svc_data.get("manufacturer") is None or "manufacturer" not in svc_data
+            )
+
+
+# ── Schedule ──────────────────────────────────────────────────────────
+
+
+class TestZHASchedule:
+    """Tests for ZHA schedule methods."""
+
+    @pytest.fixture
+    def backend(self, hass):
+        return ZHABackend(hass)
+
+    @pytest.fixture
+    def mock_er(self):
+        with patch(
+            "custom_components.danfoss_ally_gateway.backend.zha.er"
+        ) as mock_er_mod:
+            mock_registry = MagicMock()
+            mock_er_mod.async_get.return_value = mock_registry
+            mock_registry.async_get.return_value = _mock_entity_registry_entry()
+            yield mock_registry
+
+    async def test_set_weekly_schedule(self, backend, hass, mock_er):
+        hass.services = MagicMock()
+        hass.services.async_call = AsyncMock()
+
+        transitions = [(0, 2000), (480, 2200)]
+        await backend.async_set_weekly_schedule(
+            "climate.trv1",
+            day_of_week=0x02,
+            num_transitions=2,
+            mode=0x01,
+            transitions=transitions,
+        )
+
+        svc_data = hass.services.async_call.call_args[0][2]
+        assert svc_data["command"] == 0x01  # SetWeeklySchedule
+        assert svc_data["cluster_id"] == CLUSTER_THERMOSTAT
+        # args: [num_transitions, dow, mode, t1_min, t1_sp, t2_min, t2_sp]
+        args = svc_data["args"]
+        assert args[0] == 2  # num transitions
+        assert args[1] == 0x02  # dow
+        assert args[2] == 0x01  # mode
+        assert args[3] == 0  # first transition time
+        assert args[4] == 2000  # first setpoint
+        assert args[5] == 480  # second transition time
+        assert args[6] == 2200  # second setpoint
+
+    async def test_get_weekly_schedule(self, backend, hass, mock_er):
+        hass.services = MagicMock()
+        hass.services.async_call = AsyncMock()
+
+        result = await backend.async_get_weekly_schedule("climate.trv1", 0x02)
+
+        assert result is None
+        svc_data = hass.services.async_call.call_args[0][2]
+        assert svc_data["command"] == 0x02  # GetWeeklySchedule
+        args = svc_data["args"]
+        assert args[0] == 0x02  # dow
+        assert args[1] == 0x01  # mode (heat)
+
+    async def test_clear_weekly_schedule(self, backend, hass, mock_er):
+        hass.services = MagicMock()
+        hass.services.async_call = AsyncMock()
+
+        await backend.async_clear_weekly_schedule("climate.trv1")
+
+        svc_data = hass.services.async_call.call_args[0][2]
+        assert svc_data["command"] == 0x03  # ClearWeeklySchedule
+        assert svc_data["args"] == []
+
+    async def test_set_programming_mode(self, backend, hass, mock_er):
+        hass.services = MagicMock()
+        hass.services.async_call = AsyncMock()
+
+        await backend.async_set_programming_mode("climate.trv1", 3)
+
+        svc_data = hass.services.async_call.call_args[0][2]
+        assert svc_data["attribute"] == ATTR_THERMOSTAT_PROGRAMMING_MODE
+        assert svc_data["value"] == 3
+        # Standard attribute - no manufacturer code
+        assert svc_data.get("manufacturer") is None or "manufacturer" not in svc_data
+
+    async def test_read_sw_error_code_success(self, backend, hass, mock_er):
+        """Returns decoded string when ZHA gateway read succeeds."""
+        mock_cluster = MagicMock()
+        mock_cluster.read_attributes = AsyncMock(return_value=({0x4000: 512}, {}))
+
+        mock_device = MagicMock()
+        mock_device.async_get_cluster.return_value = mock_cluster
+
+        mock_gateway = MagicMock()
+        mock_gateway.get_device.return_value = mock_device
+
+        mock_eui64 = MagicMock()
+        mock_eui64.convert.return_value = "00:11:22:33:44:55:66:77"
+
+        with (
+            patch(
+                "custom_components.danfoss_ally_gateway.backend.zha.get_zha_gateway",
+                return_value=mock_gateway,
+            ),
+            patch(
+                "custom_components.danfoss_ally_gateway.backend.zha.EUI64",
+                mock_eui64,
+            ),
+        ):
+            result = await backend.async_read_sw_error_code("climate.trv1")
+        assert result == "invalid_clock_information"
+
+    async def test_read_sw_error_code_no_device(self, backend, hass, mock_er):
+        """Returns None when ZHA device is not found."""
+        mock_gateway = MagicMock()
+        mock_gateway.get_device.return_value = None
+
+        mock_eui64 = MagicMock()
+        mock_eui64.convert.return_value = "00:11:22:33:44:55:66:77"
+
+        with (
+            patch(
+                "custom_components.danfoss_ally_gateway.backend.zha.get_zha_gateway",
+                return_value=mock_gateway,
+            ),
+            patch(
+                "custom_components.danfoss_ally_gateway.backend.zha.EUI64",
+                mock_eui64,
+            ),
+        ):
+            result = await backend.async_read_sw_error_code("climate.trv1")
+        assert result is None
+
+    async def test_read_sw_error_code_gateway_unavailable(self, backend, hass, mock_er):
+        """Returns None when ZHA gateway is not available."""
+        with patch(
+            "custom_components.danfoss_ally_gateway.backend.zha.get_zha_gateway",
+            side_effect=RuntimeError("ZHA not loaded"),
+        ):
+            result = await backend.async_read_sw_error_code("climate.trv1")
+        assert result is None
+
+
+# ── UUID Resolution ───────────────────────────────────────────────────
+
+
+class TestZHAUUIDResolution:
+    """Tests for device registry UUID resolution in ZHA backend."""
+
+    @pytest.fixture
+    def backend(self, hass):
+        return ZHABackend(hass)
+
+    async def test_resolve_trv_identifier_success(self, backend, hass):
+        """Resolves device registry UUID to climate entity_id."""
+        mock_device = MagicMock()
+        mock_device.id = "uuid-abc-123"
+
+        mock_entity_entry = MagicMock()
+        mock_entity_entry.domain = "climate"
+        mock_entity_entry.entity_id = "climate.living_room_trv"
+
+        with (
+            patch("custom_components.danfoss_ally_gateway.backend.zha.dr") as mock_dr,
+            patch(
+                "custom_components.danfoss_ally_gateway.backend.zha.er"
+            ) as mock_er_mod,
+        ):
+            mock_dev_reg = MagicMock()
+            mock_dr.async_get.return_value = mock_dev_reg
+            mock_dev_reg.async_get.return_value = mock_device
+
+            mock_ent_reg = MagicMock()
+            mock_er_mod.async_get.return_value = mock_ent_reg
+            mock_er_mod.async_entries_for_device.return_value = [mock_entity_entry]
+
+            result = await backend.async_resolve_trv_identifier("uuid-abc-123")
+
+        assert result == "climate.living_room_trv"
+
+    async def test_resolve_trv_identifier_no_device(self, backend, hass):
+        """Returns None when device not found."""
+        with patch("custom_components.danfoss_ally_gateway.backend.zha.dr") as mock_dr:
+            mock_dev_reg = MagicMock()
+            mock_dr.async_get.return_value = mock_dev_reg
+            mock_dev_reg.async_get.return_value = None
+
+            result = await backend.async_resolve_trv_identifier("uuid-missing")
+
+        assert result is None
+
+    async def test_resolve_trv_identifier_no_climate_entity(self, backend, hass):
+        """Returns None when no climate entity found for device."""
+        mock_device = MagicMock()
+
+        mock_sensor_entry = MagicMock()
+        mock_sensor_entry.domain = "sensor"
+        mock_sensor_entry.entity_id = "sensor.some_sensor"
+
+        with (
+            patch("custom_components.danfoss_ally_gateway.backend.zha.dr") as mock_dr,
+            patch(
+                "custom_components.danfoss_ally_gateway.backend.zha.er"
+            ) as mock_er_mod,
+        ):
+            mock_dev_reg = MagicMock()
+            mock_dr.async_get.return_value = mock_dev_reg
+            mock_dev_reg.async_get.return_value = mock_device
+
+            mock_ent_reg = MagicMock()
+            mock_er_mod.async_get.return_value = mock_ent_reg
+            mock_er_mod.async_entries_for_device.return_value = [mock_sensor_entry]
+
+            result = await backend.async_resolve_trv_identifier("uuid-no-climate")
+
+        assert result is None
+
+    @patch(
+        "custom_components.danfoss_ally_gateway.backend.zha.async_track_state_change_event"
+    )
+    async def test_subscribe_resolves_uuid_lazily(self, mock_track, backend, hass):
+        """Subscribe resolves UUID to entity_id on first call and caches it."""
+        mock_track.return_value = MagicMock()
+        hass.states = MagicMock()
+        hass.states.get.return_value = None
+
+        mock_device = MagicMock()
+        mock_entity_entry_climate = MagicMock()
+        mock_entity_entry_climate.domain = "climate"
+        mock_entity_entry_climate.entity_id = "climate.trv1"
+
+        with (
+            patch("custom_components.danfoss_ally_gateway.backend.zha.dr") as mock_dr,
+            patch(
+                "custom_components.danfoss_ally_gateway.backend.zha.er"
+            ) as mock_er_mod,
+        ):
+            mock_dev_reg = MagicMock()
+            mock_dr.async_get.return_value = mock_dev_reg
+            mock_dev_reg.async_get.return_value = mock_device
+
+            mock_ent_reg = MagicMock()
+            mock_er_mod.async_get.return_value = mock_ent_reg
+            mock_er_mod.async_entries_for_device.return_value = [
+                mock_entity_entry_climate
+            ]
+
+            await backend.async_subscribe_trv("uuid-abc-123")
+
+        assert backend._id_to_entity["uuid-abc-123"] == "climate.trv1"
+        assert backend._entity_to_id["climate.trv1"] == "uuid-abc-123"
+        assert "uuid-abc-123" in backend._subscriptions
+
+        # State tracking should use the entity_id for event listening
+        call_args = mock_track.call_args
+        assert "climate.trv1" in call_args[0][1]
+
+    async def test_teardown_clears_mappings(self, backend):
+        """Teardown clears UUID <-> entity_id mappings."""
+        backend._id_to_entity["uuid-1"] = "climate.trv1"
+        backend._entity_to_id["climate.trv1"] = "uuid-1"
+        backend._trv_states["uuid-1"] = TRVState(entity_id="uuid-1")
+
+        await backend.async_teardown()
+
+        assert len(backend._id_to_entity) == 0
+        assert len(backend._entity_to_id) == 0
+        assert len(backend._trv_states) == 0
+
+    async def test_resolve_entity_fallback(self, backend):
+        """_resolve_entity falls back to trv_id when no mapping exists."""
+        assert backend._resolve_entity("unmapped-id") == "unmapped-id"
+
+    async def test_resolve_entity_with_mapping(self, backend):
+        """_resolve_entity returns mapped entity_id."""
+        backend._id_to_entity["uuid-1"] = "climate.trv1"
+        assert backend._resolve_entity("uuid-1") == "climate.trv1"
