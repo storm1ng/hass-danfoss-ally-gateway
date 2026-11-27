@@ -39,7 +39,7 @@ jobs:
           if [ -n "${{ matrix.homeassistant-version }}" ]; then
             pip install \
               "homeassistant==${{ matrix.homeassistant-version }}" \
-              "pytest-homeassistant-custom-component==${{ matrix.test-helper-version }}" \
+              "pytest-homeassistant==${{ matrix.test-helper-version }}" \
               "${{ matrix.extra-pins }}"
           else
             pip install homeassistant
