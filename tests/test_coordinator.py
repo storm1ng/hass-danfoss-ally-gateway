@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from conftest import make_subentry_data, make_trv_state
-from homeassistant.const import STATE_ON, STATE_UNAVAILABLE
+from homeassistant.const import STATE_OFF, STATE_ON, STATE_UNAVAILABLE
 
 from custom_components.danfoss_ally_gateway.const import (
     CONF_TRV_ENTITIES,
@@ -22,6 +22,12 @@ from custom_components.danfoss_ally_gateway.const import (
 from custom_components.danfoss_ally_gateway.coordinator import (
     RoomCoordinator,
     RoomState,
+)
+from custom_components.danfoss_ally_gateway.coordinator.covered_quirk import (
+    STORAGE_KEY as COVERED_STORAGE_KEY,
+)
+from custom_components.danfoss_ally_gateway.coordinator.covered_quirk import (
+    STORAGE_VERSION as COVERED_STORAGE_VERSION,
 )
 from custom_components.danfoss_ally_gateway.schedule import (
     DaySchedule,
@@ -1324,6 +1330,304 @@ class TestWindowCoordination:
 
         mock_backend.async_set_external_window_open.assert_not_called()
         assert coord._forced_window_open_trvs == {"trv_1", "trv_2"}
+        await coord.async_teardown()
+
+
+# ── Window Sensors ────────────────────────────────────────────────────
+
+WINDOW_1 = "binary_sensor.window_1"
+WINDOW_2 = "binary_sensor.window_2"
+
+
+def _external_window_writes(mock_backend) -> list[tuple[str, bool]]:
+    """Return (trv_id, is_open) for every external window write."""
+    return [
+        (c[0][0], c[0][1])
+        for c in mock_backend.async_set_external_window_open.call_args_list
+    ]
+
+
+class TestWindowSensors:
+    """Tests for window sensors driving External Open Window."""
+
+    async def test_open_sensor_at_setup_forces_all_trvs(self, hass, mock_backend):
+        hass.states.async_set(WINDOW_1, STATE_ON)
+        data = make_subentry_data(window_sensors=[WINDOW_1])
+        coord = RoomCoordinator(hass, mock_backend, data)
+        await coord.async_setup()
+
+        assert _external_window_writes(mock_backend) == [
+            ("trv_1", True),
+            ("trv_2", True),
+        ]
+        await coord.async_teardown()
+
+    async def test_closed_sensor_at_setup_clears_all_trvs(self, hass, mock_backend):
+        hass.states.async_set(WINDOW_1, STATE_OFF)
+        data = make_subentry_data(window_sensors=[WINDOW_1])
+        coord = RoomCoordinator(hass, mock_backend, data)
+        await coord.async_setup()
+
+        assert _external_window_writes(mock_backend) == [
+            ("trv_1", False),
+            ("trv_2", False),
+        ]
+        await coord.async_teardown()
+
+    async def test_open_and_close_single_trv(self, hass, mock_backend):
+        hass.states.async_set(WINDOW_1, STATE_OFF)
+        data = make_subentry_data(trv_ids=["trv_1"], window_sensors=[WINDOW_1])
+        coord = RoomCoordinator(hass, mock_backend, data)
+        await coord.async_setup()
+        mock_backend.async_set_external_window_open.reset_mock()
+
+        hass.states.async_set(WINDOW_1, STATE_ON)
+        await hass.async_block_till_done()
+        hass.states.async_set(WINDOW_1, STATE_OFF)
+        await hass.async_block_till_done()
+
+        assert _external_window_writes(mock_backend) == [
+            ("trv_1", True),
+            ("trv_1", False),
+        ]
+        await coord.async_teardown()
+
+    async def test_cleared_only_when_all_sensors_closed(self, hass, mock_backend):
+        hass.states.async_set(WINDOW_1, STATE_ON)
+        hass.states.async_set(WINDOW_2, STATE_ON)
+        data = make_subentry_data(
+            trv_ids=["trv_1"], window_sensors=[WINDOW_1, WINDOW_2]
+        )
+        coord = RoomCoordinator(hass, mock_backend, data)
+        await coord.async_setup()
+        mock_backend.async_set_external_window_open.reset_mock()
+
+        hass.states.async_set(WINDOW_1, STATE_OFF)
+        await hass.async_block_till_done()
+        mock_backend.async_set_external_window_open.assert_not_called()
+
+        hass.states.async_set(WINDOW_2, STATE_OFF)
+        await hass.async_block_till_done()
+        assert _external_window_writes(mock_backend) == [("trv_1", False)]
+        await coord.async_teardown()
+
+    async def test_unavailable_sensor_counts_as_closed(self, hass, mock_backend):
+        hass.states.async_set(WINDOW_1, STATE_ON)
+        data = make_subentry_data(trv_ids=["trv_1"], window_sensors=[WINDOW_1])
+        coord = RoomCoordinator(hass, mock_backend, data)
+        await coord.async_setup()
+        mock_backend.async_set_external_window_open.reset_mock()
+
+        hass.states.async_set(WINDOW_1, STATE_UNAVAILABLE)
+        await hass.async_block_till_done()
+
+        assert _external_window_writes(mock_backend) == [("trv_1", False)]
+        await coord.async_teardown()
+
+    @pytest.mark.parametrize(
+        "window_state", [WINDOW_OPEN_DETECTED, WINDOW_OPEN_EXTERNAL_OPEN]
+    )
+    async def test_trv_window_state_ignored_with_sensors(
+        self, hass, mock_backend, window_state
+    ):
+        """With sensors, TRV-reported window states trigger no writes.
+
+        A TRV forced to external open may report 3 instead of 4, so the
+        TRV-based coordination must not act on it.
+        """
+        hass.states.async_set(WINDOW_1, STATE_OFF)
+        data = make_subentry_data(window_sensors=[WINDOW_1])
+        coord = RoomCoordinator(hass, mock_backend, data)
+        await coord.async_setup()
+        mock_backend.async_set_external_window_open.reset_mock()
+
+        mock_backend.fire_state_update(
+            "trv_1", make_trv_state("trv_1", window_open_detection=window_state)
+        )
+        await hass.async_block_till_done()
+
+        mock_backend.async_set_external_window_open.assert_not_called()
+        await coord.async_teardown()
+
+
+# ── Radiator Covered Quirk ────────────────────────────────────────────
+
+
+def _record_window_writes(mock_backend) -> list[tuple[str, str, bool]]:
+    """Record covered and external window writes in call order."""
+    calls: list[tuple[str, str, bool]] = []
+
+    async def _covered(trv_id, covered):
+        calls.append(("covered", trv_id, covered))
+
+    async def _window(trv_id, is_open):
+        calls.append(("window", trv_id, is_open))
+
+    mock_backend.async_set_radiator_covered.side_effect = _covered
+    mock_backend.async_set_external_window_open.side_effect = _window
+    return calls
+
+
+def _stored_suspended(hass_storage) -> list[str]:
+    return hass_storage[COVERED_STORAGE_KEY]["data"]["trv_ids"]
+
+
+def _seed_suspended(hass_storage, trv_ids: list[str]) -> None:
+    hass_storage[COVERED_STORAGE_KEY] = {
+        "version": COVERED_STORAGE_VERSION,
+        "data": {"trv_ids": trv_ids},
+    }
+
+
+class TestCoveredQuirk:
+    """Tests for suspending radiator_covered while a window is open."""
+
+    async def _setup(self, hass, mock_backend, trv_ids, window_state):
+        hass.states.async_set(WINDOW_1, window_state)
+        data = make_subentry_data(trv_ids=trv_ids, window_sensors=[WINDOW_1])
+        coord = RoomCoordinator(hass, mock_backend, data)
+        await coord.async_setup()
+        return coord
+
+    def _report(self, hass, mock_backend, trv_id, covered):
+        mock_backend.fire_state_update(
+            trv_id, make_trv_state(trv_id, radiator_covered=covered)
+        )
+
+    async def test_open_and_close_order(self, hass, mock_backend, hass_storage):
+        coord = await self._setup(hass, mock_backend, ["trv_1"], STATE_OFF)
+        self._report(hass, mock_backend, "trv_1", True)
+        await hass.async_block_till_done()
+        calls = _record_window_writes(mock_backend)
+
+        hass.states.async_set(WINDOW_1, STATE_ON)
+        await hass.async_block_till_done()
+        assert calls == [("covered", "trv_1", False), ("window", "trv_1", True)]
+        assert _stored_suspended(hass_storage) == ["trv_1"]
+
+        calls.clear()
+        hass.states.async_set(WINDOW_1, STATE_OFF)
+        await hass.async_block_till_done()
+        assert calls == [("window", "trv_1", False), ("covered", "trv_1", True)]
+        # Still stored until the TRV confirms
+        assert _stored_suspended(hass_storage) == ["trv_1"]
+
+        self._report(hass, mock_backend, "trv_1", True)
+        await hass.async_block_till_done()
+        assert _stored_suspended(hass_storage) == []
+        await coord.async_teardown()
+
+    async def test_only_covered_trvs_suspended(self, hass, mock_backend):
+        coord = await self._setup(hass, mock_backend, ["trv_1", "trv_2"], STATE_OFF)
+        self._report(hass, mock_backend, "trv_1", True)
+        self._report(hass, mock_backend, "trv_2", False)
+        await hass.async_block_till_done()
+        calls = _record_window_writes(mock_backend)
+
+        hass.states.async_set(WINDOW_1, STATE_ON)
+        await hass.async_block_till_done()
+        assert calls == [
+            ("covered", "trv_1", False),
+            ("window", "trv_1", True),
+            ("window", "trv_2", True),
+        ]
+        await coord.async_teardown()
+
+    async def test_unknown_covered_state_not_touched(self, hass, mock_backend):
+        coord = await self._setup(hass, mock_backend, ["trv_1"], STATE_OFF)
+        hass.states.async_set(WINDOW_1, STATE_ON)
+        await hass.async_block_till_done()
+        hass.states.async_set(WINDOW_1, STATE_OFF)
+        await hass.async_block_till_done()
+
+        mock_backend.async_set_radiator_covered.assert_not_called()
+        await coord.async_teardown()
+
+    async def test_covered_reported_after_window_opened(
+        self, hass, mock_backend, hass_storage
+    ):
+        """TRV state arriving after the window opened (e.g. HA start)."""
+        coord = await self._setup(hass, mock_backend, ["trv_1", "trv_2"], STATE_ON)
+        calls = _record_window_writes(mock_backend)
+
+        self._report(hass, mock_backend, "trv_1", True)
+        await hass.async_block_till_done()
+        assert calls == [("covered", "trv_1", False), ("window", "trv_1", True)]
+        assert _stored_suspended(hass_storage) == ["trv_1"]
+
+        # A repeated report while suspended and open writes nothing
+        calls.clear()
+        self._report(hass, mock_backend, "trv_1", True)
+        await hass.async_block_till_done()
+        assert calls == []
+        await coord.async_teardown()
+
+    async def test_restart_with_window_closed_restores(
+        self, hass, mock_backend, hass_storage
+    ):
+        _seed_suspended(hass_storage, ["trv_1"])
+        calls = _record_window_writes(mock_backend)
+        coord = await self._setup(hass, mock_backend, ["trv_1"], STATE_OFF)
+
+        assert calls == [("window", "trv_1", False), ("covered", "trv_1", True)]
+        await coord.async_teardown()
+
+    async def test_restart_with_window_open_keeps_suspended(
+        self, hass, mock_backend, hass_storage
+    ):
+        _seed_suspended(hass_storage, ["trv_1"])
+        calls = _record_window_writes(mock_backend)
+        coord = await self._setup(hass, mock_backend, ["trv_1"], STATE_ON)
+        assert calls == [("covered", "trv_1", False), ("window", "trv_1", True)]
+
+        calls.clear()
+        hass.states.async_set(WINDOW_1, STATE_OFF)
+        await hass.async_block_till_done()
+        assert calls == [("window", "trv_1", False), ("covered", "trv_1", True)]
+        await coord.async_teardown()
+
+    async def test_other_rooms_trvs_not_restored(
+        self, hass, mock_backend, hass_storage
+    ):
+        _seed_suspended(hass_storage, ["trv_other"])
+        coord = await self._setup(hass, mock_backend, ["trv_1"], STATE_OFF)
+
+        mock_backend.async_set_radiator_covered.assert_not_called()
+        await coord.async_teardown()
+
+    async def test_covered_write_failure_does_not_block_window(
+        self, hass, mock_backend, caplog
+    ):
+        coord = await self._setup(hass, mock_backend, ["trv_1"], STATE_OFF)
+        self._report(hass, mock_backend, "trv_1", True)
+        await hass.async_block_till_done()
+        mock_backend.async_set_radiator_covered.side_effect = RuntimeError("boom")
+        mock_backend.async_set_external_window_open.reset_mock()
+
+        hass.states.async_set(WINDOW_1, STATE_ON)
+        await hass.async_block_till_done()
+
+        mock_backend.async_set_external_window_open.assert_called_once_with(
+            "trv_1", True
+        )
+        assert "Failed to suspend radiator_covered on TRV trv_1" in caplog.text
+        await coord.async_teardown()
+
+    async def test_no_window_sensors_never_writes_covered(self, hass, mock_backend):
+        data = make_subentry_data(trv_ids=["trv_1"])
+        coord = RoomCoordinator(hass, mock_backend, data)
+        await coord.async_setup()
+        mock_backend.fire_state_update(
+            "trv_1",
+            make_trv_state(
+                "trv_1",
+                radiator_covered=True,
+                window_open_detection=WINDOW_OPEN_DETECTED,
+            ),
+        )
+        await hass.async_block_till_done()
+
+        mock_backend.async_set_radiator_covered.assert_not_called()
         await coord.async_teardown()
 
 

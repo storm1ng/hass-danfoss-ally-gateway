@@ -363,6 +363,10 @@ class Z2MBackend(DanfossBackend):
         """Write ExternalOpenWindowDetected to TRV."""
         await self._async_set(trv_id, {Z2M_ATTR_EXTERNAL_WINDOW_OPEN: is_open})
 
+    async def async_set_radiator_covered(self, trv_id: str, covered: bool) -> None:
+        """Write RadiatorCovered to TRV."""
+        await self._async_set(trv_id, {Z2M_ATTR_RADIATOR_COVERED: covered})
+
     # ── Commands ───────────────────────────────────────────────────────
 
     async def async_send_setpoint_command(

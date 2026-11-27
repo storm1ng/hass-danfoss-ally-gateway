@@ -13,7 +13,7 @@ A [Home Assistant](https://www.home-assistant.io/) custom integration that repla
 - **Weekly schedule programming** -- program up to 6 daily transitions per day via ZCL thermostat commands
 - **Preheat** -- start heating before a scheduled temperature increase to reach the target on time
 - **Multi-TRV load balancing** -- balance heating load across TRVs in a room
-- **Window open detection** -- detect and propagate window-open state across TRVs in a room
+- **Window open detection** -- detect and propagate window-open state across TRVs in a room, optionally driven by window/door contact sensors
 - **Remote climate sync** -- bidirectional setpoint synchronization with another HA climate entity
 - **Heat source monitoring** -- track heating system availability via a climate or binary sensor entity
 - **Time synchronization** -- periodic time sync to TRVs
@@ -56,6 +56,7 @@ A [Home Assistant](https://www.home-assistant.io/) custom integration that repla
    - **Room name** and area assignment
    - **TRV devices** -- select one or more Danfoss Ally TRVs
    - **External temperature sensor** (optional) -- any HA temperature sensor
+   - **Window sensors** (optional) -- window/door contacts; while any is open, all TRVs in the room are set to window open (TRVs with radiator covered enabled ignore window open, so radiator covered is switched off on them while a window is open and restored afterwards)
    - **Heat source** (optional) -- a climate or binary sensor entity
    - **Remote climate** (optional) -- a climate entity for bidirectional setpoint sync
    - **Schedule helper** (optional) -- a schedule helper entity defining at-home/away periods

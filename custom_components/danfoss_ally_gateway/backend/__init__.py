@@ -157,6 +157,10 @@ class DanfossBackend(abc.ABC):
     async def async_set_external_window_open(self, trv_id: str, is_open: bool) -> None:
         """Write ExternalOpenWindowDetected to TRV."""
 
+    @abc.abstractmethod
+    async def async_set_radiator_covered(self, trv_id: str, covered: bool) -> None:
+        """Write RadiatorCovered to TRV."""
+
     # ── Commands ───────────────────────────────────────────────────────
 
     @abc.abstractmethod

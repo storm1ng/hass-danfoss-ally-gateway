@@ -19,6 +19,11 @@ Deactivation:
 Orphan recovery:
 - A TRV reporting state 4 while nothing is tracked (e.g. after an HA restart)
   has its external_window_open cleared.
+
+Rooms with window sensors configured do not use this delegate. The sensors
+drive External Open Window directly (see RoomCoordinator), because a TRV
+forced to external open may report 3 instead of 4, which this logic would
+mistake for its own detection.
 """
 
 from __future__ import annotations

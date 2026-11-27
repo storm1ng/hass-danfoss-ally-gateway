@@ -27,6 +27,7 @@ from custom_components.danfoss_ally_gateway.const import (
     Z2M_ATTR_OCCUPIED_HEATING_SETPOINT,
     Z2M_ATTR_PI_HEATING_DEMAND,
     Z2M_ATTR_PROGRAMMING_MODE,
+    Z2M_ATTR_RADIATOR_COVERED,
     Z2M_ATTR_WINDOW_OPEN_DETECTION,
 )
 
@@ -491,6 +492,13 @@ class TestZ2MAttributeWrites:
         await backend.async_set_external_window_open("trv1", True)
         payload = json.loads(mock_mqtt.async_publish.call_args[0][2])
         assert payload[Z2M_ATTR_EXTERNAL_WINDOW_OPEN] is True
+
+    @patch("custom_components.danfoss_ally_gateway.backend.z2m.mqtt")
+    async def test_set_radiator_covered(self, mock_mqtt, backend):
+        mock_mqtt.async_publish = AsyncMock()
+        await backend.async_set_radiator_covered("trv1", False)
+        payload = json.loads(mock_mqtt.async_publish.call_args[0][2])
+        assert payload[Z2M_ATTR_RADIATOR_COVERED] is False
 
 
 # ── Commands ──────────────────────────────────────────────────────────
