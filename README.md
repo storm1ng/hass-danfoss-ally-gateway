@@ -56,6 +56,7 @@ A [Home Assistant](https://www.home-assistant.io/) custom integration that repla
    - **Room name** and area assignment
    - **TRV devices** -- select one or more Danfoss Ally TRVs
    - **External temperature sensor** (optional) -- any HA temperature sensor
+   - **Humidity sensor** (optional) -- any HA humidity sensor; shown as current humidity on the room thermostat
    - **Heat source** (optional) -- a climate or binary sensor entity
    - **Remote climate** (optional) -- a climate entity for bidirectional setpoint sync
    - **Schedule helper** (optional) -- a schedule helper entity defining at-home/away periods

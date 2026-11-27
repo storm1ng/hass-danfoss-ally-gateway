@@ -26,6 +26,7 @@ from custom_components.danfoss_ally_gateway.const import (
     CONF_BACKEND,
     CONF_HEAT_SOURCE,
     CONF_HEAT_SOURCE_TYPE,
+    CONF_HUMIDITY_SENSOR,
     CONF_MQTT_BASE_TOPIC,
     CONF_PREHEAT_ENABLED,
     CONF_REMOTE_CLIMATE,
@@ -364,6 +365,7 @@ class TestExtractRoomData:
         assert result[CONF_TRV_ENTITIES] == ["trv_1"]
         assert result[CONF_AREA] == ""
         assert result[CONF_TEMP_SENSOR] == ""
+        assert result[CONF_HUMIDITY_SENSOR] == ""
         assert result[CONF_HEAT_SOURCE] == ""
         assert result[CONF_HEAT_SOURCE_TYPE] == ""
         assert result[CONF_REMOTE_CLIMATE] == ""
@@ -380,6 +382,7 @@ class TestExtractRoomData:
             CONF_AREA: "area_123",
             CONF_TRV_ENTITIES: ["trv_a", "trv_b"],
             CONF_TEMP_SENSOR: "sensor.living_room_temp",
+            CONF_HUMIDITY_SENSOR: "sensor.living_room_humidity",
             CONF_HEAT_SOURCE: "climate.boiler",
             CONF_HEAT_SOURCE_TYPE: "climate",
             CONF_REMOTE_CLIMATE: "climate.remote",

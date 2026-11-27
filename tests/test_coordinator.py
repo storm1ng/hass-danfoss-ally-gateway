@@ -340,6 +340,95 @@ class TestExternalTemperature:
         await coord.async_teardown()
 
 
+# ── Humidity Sensor ───────────────────────────────────────────────────
+
+
+class TestHumiditySensor:
+    """Tests for the display-only room humidity sensor."""
+
+    async def test_initial_value_read_on_setup(self, hass, mock_backend):
+        hass.states.async_set("sensor.humidity", "48.5")
+        data = make_subentry_data(humidity_sensor="sensor.humidity")
+        coord = RoomCoordinator(hass, mock_backend, data)
+        await coord.async_setup()
+
+        assert coord.state.current_humidity == 48.5
+        await coord.async_teardown()
+
+    async def test_state_change_updates_and_notifies(self, hass, mock_backend):
+        hass.states.async_set("sensor.humidity", "48.5")
+        data = make_subentry_data(humidity_sensor="sensor.humidity")
+        coord = RoomCoordinator(hass, mock_backend, data)
+        await coord.async_setup()
+        callback_states = []
+        coord.register_state_callback(lambda s: callback_states.append(s))
+
+        hass.states.async_set("sensor.humidity", "55")
+        await hass.async_block_till_done()
+
+        assert coord.state.current_humidity == 55.0
+        assert len(callback_states) == 1
+        await coord.async_teardown()
+
+    async def test_unchanged_value_does_not_notify(self, hass, mock_backend):
+        hass.states.async_set("sensor.humidity", "48.5")
+        data = make_subentry_data(humidity_sensor="sensor.humidity")
+        coord = RoomCoordinator(hass, mock_backend, data)
+        await coord.async_setup()
+        callback_states = []
+        coord.register_state_callback(lambda s: callback_states.append(s))
+
+        hass.states.async_set("sensor.humidity", "48.5", {"changed": True})
+        await hass.async_block_till_done()
+
+        assert callback_states == []
+        await coord.async_teardown()
+
+    @pytest.mark.parametrize("bad_state", [STATE_UNAVAILABLE, "unknown", "n/a"])
+    async def test_invalid_state_clears_value(self, hass, mock_backend, bad_state):
+        hass.states.async_set("sensor.humidity", "48.5")
+        data = make_subentry_data(humidity_sensor="sensor.humidity")
+        coord = RoomCoordinator(hass, mock_backend, data)
+        await coord.async_setup()
+
+        hass.states.async_set("sensor.humidity", bad_state)
+        await hass.async_block_till_done()
+
+        assert coord.state.current_humidity is None
+        await coord.async_teardown()
+
+    async def test_no_sensor_configured(self, hass, mock_backend, subentry_data):
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        await coord.async_setup()
+
+        assert coord.state.current_humidity is None
+        await coord.async_teardown()
+
+    async def test_no_updates_after_teardown(self, hass, mock_backend):
+        hass.states.async_set("sensor.humidity", "48.5")
+        data = make_subentry_data(humidity_sensor="sensor.humidity")
+        coord = RoomCoordinator(hass, mock_backend, data)
+        await coord.async_setup()
+        await coord.async_teardown()
+
+        hass.states.async_set("sensor.humidity", "60")
+        await hass.async_block_till_done()
+
+        assert coord.state.current_humidity == 48.5
+
+    async def test_humidity_not_sent_to_trvs(self, hass, mock_backend):
+        hass.states.async_set("sensor.humidity", "48.5")
+        data = make_subentry_data(humidity_sensor="sensor.humidity")
+        coord = RoomCoordinator(hass, mock_backend, data)
+        await coord.async_setup()
+
+        hass.states.async_set("sensor.humidity", "60")
+        await hass.async_block_till_done()
+
+        mock_backend.async_set_external_temperature.assert_not_called()
+        await coord.async_teardown()
+
+
 # ── Heat Availability ─────────────────────────────────────────────────
 
 

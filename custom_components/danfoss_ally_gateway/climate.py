@@ -2,6 +2,7 @@
 
 Provides a single climate entity per room that:
 - Shows current temperature from external sensor or TRV average
+- Shows current humidity from an optional humidity sensor
 - Shows/controls target temperature synced to all TRVs
 - Shows hvac_action based on pi_heating_demand
 - Exposes extra state attributes (demand, heat available, etc.)
@@ -110,12 +111,14 @@ class DanfossAllyRoomClimate(DanfossAllyEntityBase, ClimateEntity):
         # Initial state
         self._attr_hvac_mode = HVACMode.HEAT
         self._attr_native_current_temperature = coordinator.state.current_temperature
+        self._attr_current_humidity = coordinator.state.current_humidity
         self._attr_native_target_temperature = coordinator.state.target_temperature
 
     @callback
     def _handle_coordinator_update(self, state: RoomState) -> None:
         """Handle updated room state from coordinator."""
         self._attr_native_current_temperature = state.current_temperature
+        self._attr_current_humidity = state.current_humidity
         self._attr_native_target_temperature = state.target_temperature
         self.async_write_ha_state()
 

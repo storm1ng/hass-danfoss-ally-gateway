@@ -40,6 +40,7 @@ from ..const import (
     CONF_AWAY_TEMP,
     CONF_HEAT_SOURCE,
     CONF_HEAT_SOURCE_TYPE,
+    CONF_HUMIDITY_SENSOR,
     CONF_PREHEAT_ENABLED,
     CONF_REMOTE_CLIMATE,
     CONF_ROOM_NAME,
@@ -75,6 +76,7 @@ class RoomState:
 
     room_name: str = ""
     current_temperature: float | None = None
+    current_humidity: float | None = None
     target_temperature: float | None = None
     max_pi_heating_demand: int = 0
     heat_required: bool = False
@@ -112,6 +114,7 @@ class RoomCoordinator:
         self._room_name: str = subentry_data[CONF_ROOM_NAME]
         self._trv_ids: list[str] = list(subentry_data[CONF_TRV_ENTITIES])
         self._temp_sensor_id: str = subentry_data.get(CONF_TEMP_SENSOR, "")
+        self._humidity_sensor_id: str = subentry_data.get(CONF_HUMIDITY_SENSOR, "")
         self._heat_source_id: str = subentry_data.get(CONF_HEAT_SOURCE, "")
         self._heat_source_type: str = subentry_data.get(CONF_HEAT_SOURCE_TYPE, "")
         self._remote_climate_id: str = subentry_data.get(CONF_REMOTE_CLIMATE, "")
@@ -222,6 +225,16 @@ class RoomCoordinator:
             )
             self._unsub_callbacks.append(unsub)
             await self._ext_temp.async_send_initial()
+
+        # Humidity sensor (display only, not sent to TRVs)
+        if self._humidity_sensor_id:
+            unsub = async_track_state_change_event(
+                self.hass,
+                [self._humidity_sensor_id],
+                self._handle_humidity_sensor_change,
+            )
+            self._unsub_callbacks.append(unsub)
+            self._update_humidity()
 
         # Heat source entity
         if self._heat_source_id:
@@ -494,6 +507,35 @@ class RoomCoordinator:
                 )
 
         self._notify_state_update()
+
+    # ── Humidity ──────────────────────────────────────────────────────
+
+    @callback
+    def _handle_humidity_sensor_change(
+        self, event: Event[EventStateChangedData]
+    ) -> None:
+        """Handle humidity sensor state change."""
+        if self._update_humidity():
+            self._notify_state_update()
+
+    def _update_humidity(self) -> bool:
+        """Read the humidity sensor into the room state. Return True if it changed.
+
+        An unavailable, unknown or non-numeric sensor clears the value, so the
+        climate entity never shows a stale humidity.
+        """
+        humidity: float | None = None
+        sensor_state = self.hass.states.get(self._humidity_sensor_id)
+        if sensor_state and sensor_state.state not in (
+            STATE_UNAVAILABLE,
+            STATE_UNKNOWN,
+        ):
+            with contextlib.suppress(ValueError, TypeError):
+                humidity = float(sensor_state.state)
+        if humidity == self.state.current_humidity:
+            return False
+        self.state.current_humidity = humidity
+        return True
 
     # ── Remote Climate Sync ───────────────────────────────────────────
 

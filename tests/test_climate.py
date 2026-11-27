@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
 from homeassistant.components.climate.const import (
     PRESET_NONE,
     ClimateEntityFeature,
@@ -121,6 +123,36 @@ class TestClimateEntityState:
         assert attrs["heat_available"] is True
         assert attrs["load_room_mean"] == 150
         assert attrs["trv_count"] == 2
+
+    def test_current_humidity_none_by_default(self, hass, mock_backend, subentry_data):
+        from custom_components.danfoss_ally_gateway.coordinator import RoomCoordinator
+
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        entity = create_room_entities(coord, "entry1", "sub1")[0]
+        assert entity.current_humidity is None
+
+    def test_current_humidity_initial(self, hass, mock_backend, subentry_data):
+        from custom_components.danfoss_ally_gateway.coordinator import RoomCoordinator
+
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        coord.state.current_humidity = 47.0
+        entity = create_room_entities(coord, "entry1", "sub1")[0]
+        assert entity.current_humidity == 47.0
+
+    def test_current_humidity_follows_coordinator_update(
+        self, hass, mock_backend, subentry_data
+    ):
+        from custom_components.danfoss_ally_gateway.coordinator import RoomCoordinator
+
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        entity = create_room_entities(coord, "entry1", "sub1")[0]
+        entity.async_write_ha_state = MagicMock()
+
+        coord.state.current_humidity = 52.5
+        entity._handle_coordinator_update(coord.state)
+
+        assert entity._attr_current_humidity == 52.5
+        entity.async_write_ha_state.assert_called_once()
 
     async def test_set_temperature(self, hass, mock_backend, subentry_data):
         from custom_components.danfoss_ally_gateway.coordinator import RoomCoordinator
