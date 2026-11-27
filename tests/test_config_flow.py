@@ -33,6 +33,7 @@ from custom_components.danfoss_ally_gateway.const import (
     CONF_SCHEDULE_ENTITY,
     CONF_TEMP_SENSOR,
     CONF_TRV_ENTITIES,
+    CONF_WINDOW_SENSORS,
     DEFAULT_AT_HOME_TEMP,
     DEFAULT_AWAY_TEMP,
     DOMAIN,
@@ -368,6 +369,7 @@ class TestExtractRoomData:
         assert result[CONF_HEAT_SOURCE_TYPE] == ""
         assert result[CONF_REMOTE_CLIMATE] == ""
         assert result[CONF_SCHEDULE_ENTITY] == ""
+        assert result[CONF_WINDOW_SENSORS] == []
         # Temps always stored with defaults
         assert result[CONF_AT_HOME_TEMP] == DEFAULT_AT_HOME_TEMP
         assert result[CONF_AWAY_TEMP] == DEFAULT_AWAY_TEMP
@@ -380,6 +382,7 @@ class TestExtractRoomData:
             CONF_AREA: "area_123",
             CONF_TRV_ENTITIES: ["trv_a", "trv_b"],
             CONF_TEMP_SENSOR: "sensor.living_room_temp",
+            CONF_WINDOW_SENSORS: ["binary_sensor.window_1", "binary_sensor.door"],
             CONF_HEAT_SOURCE: "climate.boiler",
             CONF_HEAT_SOURCE_TYPE: "climate",
             CONF_REMOTE_CLIMATE: "climate.remote",

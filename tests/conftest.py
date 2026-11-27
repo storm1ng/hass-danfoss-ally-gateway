@@ -22,6 +22,7 @@ from custom_components.danfoss_ally_gateway.const import (
     CONF_SCHEDULE_ENTITY,
     CONF_TEMP_SENSOR,
     CONF_TRV_ENTITIES,
+    CONF_WINDOW_SENSORS,
     DEFAULT_AT_HOME_TEMP,
     DEFAULT_AWAY_TEMP,
 )
@@ -151,6 +152,7 @@ def make_subentry_data(
     at_home_temp: float = DEFAULT_AT_HOME_TEMP,
     away_temp: float = DEFAULT_AWAY_TEMP,
     preheat_enabled: bool = True,
+    window_sensors: list[str] | None = None,
 ) -> dict[str, Any]:
     """Build a subentry data dict for creating a RoomCoordinator."""
     return {
@@ -164,6 +166,7 @@ def make_subentry_data(
         CONF_AT_HOME_TEMP: at_home_temp,
         CONF_AWAY_TEMP: away_temp,
         CONF_PREHEAT_ENABLED: preheat_enabled,
+        CONF_WINDOW_SENSORS: window_sensors or [],
     }
 
 

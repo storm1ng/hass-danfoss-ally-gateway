@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from conftest import make_subentry_data, make_trv_state
-from homeassistant.const import STATE_ON, STATE_UNAVAILABLE
+from homeassistant.const import STATE_OFF, STATE_ON, STATE_UNAVAILABLE
 
 from custom_components.danfoss_ally_gateway.const import (
     CONF_TRV_ENTITIES,
@@ -1324,6 +1324,123 @@ class TestWindowCoordination:
 
         mock_backend.async_set_external_window_open.assert_not_called()
         assert coord._forced_window_open_trvs == {"trv_1", "trv_2"}
+        await coord.async_teardown()
+
+
+# ── Window Sensors ────────────────────────────────────────────────────
+
+WINDOW_1 = "binary_sensor.window_1"
+WINDOW_2 = "binary_sensor.window_2"
+
+
+def _external_window_writes(mock_backend) -> list[tuple[str, bool]]:
+    """Return (trv_id, is_open) for every external window write."""
+    return [
+        (c[0][0], c[0][1])
+        for c in mock_backend.async_set_external_window_open.call_args_list
+    ]
+
+
+class TestWindowSensors:
+    """Tests for window sensors driving External Open Window."""
+
+    async def test_open_sensor_at_setup_forces_all_trvs(self, hass, mock_backend):
+        hass.states.async_set(WINDOW_1, STATE_ON)
+        data = make_subentry_data(window_sensors=[WINDOW_1])
+        coord = RoomCoordinator(hass, mock_backend, data)
+        await coord.async_setup()
+
+        assert _external_window_writes(mock_backend) == [
+            ("trv_1", True),
+            ("trv_2", True),
+        ]
+        await coord.async_teardown()
+
+    async def test_closed_sensor_at_setup_clears_all_trvs(self, hass, mock_backend):
+        hass.states.async_set(WINDOW_1, STATE_OFF)
+        data = make_subentry_data(window_sensors=[WINDOW_1])
+        coord = RoomCoordinator(hass, mock_backend, data)
+        await coord.async_setup()
+
+        assert _external_window_writes(mock_backend) == [
+            ("trv_1", False),
+            ("trv_2", False),
+        ]
+        await coord.async_teardown()
+
+    async def test_open_and_close_single_trv(self, hass, mock_backend):
+        hass.states.async_set(WINDOW_1, STATE_OFF)
+        data = make_subentry_data(trv_ids=["trv_1"], window_sensors=[WINDOW_1])
+        coord = RoomCoordinator(hass, mock_backend, data)
+        await coord.async_setup()
+        mock_backend.async_set_external_window_open.reset_mock()
+
+        hass.states.async_set(WINDOW_1, STATE_ON)
+        await hass.async_block_till_done()
+        hass.states.async_set(WINDOW_1, STATE_OFF)
+        await hass.async_block_till_done()
+
+        assert _external_window_writes(mock_backend) == [
+            ("trv_1", True),
+            ("trv_1", False),
+        ]
+        await coord.async_teardown()
+
+    async def test_cleared_only_when_all_sensors_closed(self, hass, mock_backend):
+        hass.states.async_set(WINDOW_1, STATE_ON)
+        hass.states.async_set(WINDOW_2, STATE_ON)
+        data = make_subentry_data(
+            trv_ids=["trv_1"], window_sensors=[WINDOW_1, WINDOW_2]
+        )
+        coord = RoomCoordinator(hass, mock_backend, data)
+        await coord.async_setup()
+        mock_backend.async_set_external_window_open.reset_mock()
+
+        hass.states.async_set(WINDOW_1, STATE_OFF)
+        await hass.async_block_till_done()
+        mock_backend.async_set_external_window_open.assert_not_called()
+
+        hass.states.async_set(WINDOW_2, STATE_OFF)
+        await hass.async_block_till_done()
+        assert _external_window_writes(mock_backend) == [("trv_1", False)]
+        await coord.async_teardown()
+
+    async def test_unavailable_sensor_counts_as_closed(self, hass, mock_backend):
+        hass.states.async_set(WINDOW_1, STATE_ON)
+        data = make_subentry_data(trv_ids=["trv_1"], window_sensors=[WINDOW_1])
+        coord = RoomCoordinator(hass, mock_backend, data)
+        await coord.async_setup()
+        mock_backend.async_set_external_window_open.reset_mock()
+
+        hass.states.async_set(WINDOW_1, STATE_UNAVAILABLE)
+        await hass.async_block_till_done()
+
+        assert _external_window_writes(mock_backend) == [("trv_1", False)]
+        await coord.async_teardown()
+
+    @pytest.mark.parametrize(
+        "window_state", [WINDOW_OPEN_DETECTED, WINDOW_OPEN_EXTERNAL_OPEN]
+    )
+    async def test_trv_window_state_ignored_with_sensors(
+        self, hass, mock_backend, window_state
+    ):
+        """With sensors, TRV-reported window states trigger no writes.
+
+        A TRV forced to external open may report 3 instead of 4, so the
+        TRV-based coordination must not act on it.
+        """
+        hass.states.async_set(WINDOW_1, STATE_OFF)
+        data = make_subentry_data(window_sensors=[WINDOW_1])
+        coord = RoomCoordinator(hass, mock_backend, data)
+        await coord.async_setup()
+        mock_backend.async_set_external_window_open.reset_mock()
+
+        mock_backend.fire_state_update(
+            "trv_1", make_trv_state("trv_1", window_open_detection=window_state)
+        )
+        await hass.async_block_till_done()
+
+        mock_backend.async_set_external_window_open.assert_not_called()
         await coord.async_teardown()
 
 

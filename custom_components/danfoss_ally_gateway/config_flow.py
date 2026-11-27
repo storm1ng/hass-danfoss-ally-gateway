@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 import voluptuous as vol
+from homeassistant.components.binary_sensor import BinarySensorDeviceClass
 from homeassistant.components.sensor import SensorDeviceClass
 from homeassistant.config_entries import (
     ConfigEntry,
@@ -36,6 +37,7 @@ from .const import (
     CONF_SCHEDULE_ENTITY,
     CONF_TEMP_SENSOR,
     CONF_TRV_ENTITIES,
+    CONF_WINDOW_SENSORS,
     DEFAULT_AT_HOME_TEMP,
     DEFAULT_AWAY_TEMP,
     DOMAIN,
@@ -292,6 +294,7 @@ def _extract_room_data(user_input: dict[str, Any]) -> dict[str, Any]:
         CONF_AREA: user_input.get(CONF_AREA, ""),
         CONF_TRV_ENTITIES: user_input[CONF_TRV_ENTITIES],
         CONF_TEMP_SENSOR: user_input.get(CONF_TEMP_SENSOR, ""),
+        CONF_WINDOW_SENSORS: user_input.get(CONF_WINDOW_SENSORS, []),
         CONF_HEAT_SOURCE: user_input.get(CONF_HEAT_SOURCE, ""),
         CONF_HEAT_SOURCE_TYPE: user_input.get(CONF_HEAT_SOURCE_TYPE, ""),
         CONF_REMOTE_CLIMATE: user_input.get(CONF_REMOTE_CLIMATE, ""),
@@ -340,6 +343,17 @@ def _build_room_schema(
                 selector.EntitySelectorConfig(
                     domain="sensor",
                     device_class=SensorDeviceClass.TEMPERATURE,
+                )
+            ),
+            _field(CONF_WINDOW_SENSORS): selector.EntitySelector(
+                selector.EntitySelectorConfig(
+                    domain="binary_sensor",
+                    device_class=[
+                        BinarySensorDeviceClass.WINDOW,
+                        BinarySensorDeviceClass.DOOR,
+                        BinarySensorDeviceClass.OPENING,
+                    ],
+                    multiple=True,
                 )
             ),
             _field(CONF_HEAT_SOURCE_TYPE): selector.SelectSelector(

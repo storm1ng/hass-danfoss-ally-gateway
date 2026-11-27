@@ -46,6 +46,7 @@ from ..const import (
     CONF_SCHEDULE_ENTITY,
     CONF_TEMP_SENSOR,
     CONF_TRV_ENTITIES,
+    CONF_WINDOW_SENSORS,
     DEFAULT_AT_HOME_TEMP,
     DEFAULT_AWAY_TEMP,
     HEAT_SOURCE_BINARY_SENSOR,
@@ -115,6 +116,10 @@ class RoomCoordinator:
         self._heat_source_id: str = subentry_data.get(CONF_HEAT_SOURCE, "")
         self._heat_source_type: str = subentry_data.get(CONF_HEAT_SOURCE_TYPE, "")
         self._remote_climate_id: str = subentry_data.get(CONF_REMOTE_CLIMATE, "")
+        self._window_sensor_ids: list[str] = list(
+            subentry_data.get(CONF_WINDOW_SENSORS, [])
+        )
+        self._window_sensor_open: bool | None = None
 
         # Current room state
         self.state = RoomState(room_name=self._room_name)
@@ -231,6 +236,14 @@ class RoomCoordinator:
             self._unsub_callbacks.append(unsub)
             await self._async_update_heat_availability()
 
+        # Window sensors
+        if self._window_sensor_ids:
+            unsub = async_track_state_change_event(
+                self.hass, self._window_sensor_ids, self._handle_window_sensor_change
+            )
+            self._unsub_callbacks.append(unsub)
+            await self._async_update_window_sensors()
+
         # Remote climate entity
         if self._remote_climate_id:
             unsub = async_track_state_change_event(
@@ -313,10 +326,11 @@ class RoomCoordinator:
                 self._async_check_setpoint_coordination(trv_id, old_state, trv_state)
             )
 
-        # Window coordination
-        self.hass.async_create_task(
-            self._window.async_check_coordination(trv_id, trv_state)
-        )
+        # Window coordination (window sensors take over if configured)
+        if not self._window_sensor_ids:
+            self.hass.async_create_task(
+                self._window.async_check_coordination(trv_id, trv_state)
+            )
 
         # Preheat coordination
         self.hass.async_create_task(
@@ -494,6 +508,44 @@ class RoomCoordinator:
                 )
 
         self._notify_state_update()
+
+    # ── Window Sensors ────────────────────────────────────────────────
+
+    @callback
+    def _handle_window_sensor_change(self, event: Event[EventStateChangedData]) -> None:
+        """Handle window sensor state change."""
+        self.hass.async_create_task(self._async_update_window_sensors())
+
+    async def _async_update_window_sensors(self) -> None:
+        """Write external window open to TRVs while any window sensor is open.
+
+        Unavailable or unknown sensors count as closed, so a dead sensor
+        never blocks heating.
+        """
+        is_open = any(
+            (state := self.hass.states.get(entity_id)) is not None
+            and state.state == STATE_ON
+            for entity_id in self._window_sensor_ids
+        )
+        if self._window_sensor_open == is_open:
+            return
+
+        self._window_sensor_open = is_open
+        _LOGGER.debug(
+            "Window sensors in room '%s' report %s",
+            self._room_name,
+            "open" if is_open else "closed",
+        )
+
+        for trv_id in self._trv_ids:
+            try:
+                await self._backend.async_set_external_window_open(trv_id, is_open)
+            except Exception:  # noqa: BLE001
+                _LOGGER.exception(
+                    "Failed to set external_window_open on TRV %s in room '%s'",
+                    trv_id,
+                    self._room_name,
+                )
 
     # ── Remote Climate Sync ───────────────────────────────────────────
 
