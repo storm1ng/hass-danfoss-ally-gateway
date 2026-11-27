@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from datetime import time
 from typing import Any, Final
 
 from .const import (
@@ -406,13 +407,13 @@ def schedules_match(
 # ── HA schedule entity day name mapping ────────────────────────────────
 # HA schedule helper uses lowercase English day names; ZCL uses 0=Sunday..6=Saturday.
 _HA_DAY_TO_INDEX: dict[str, int] = {
-    "sun": 0,
-    "mon": 1,
-    "tue": 2,
-    "wed": 3,
-    "thu": 4,
-    "fri": 5,
-    "sat": 6,
+    "sunday": 0,
+    "monday": 1,
+    "tuesday": 2,
+    "wednesday": 3,
+    "thursday": 4,
+    "friday": 5,
+    "saturday": 6,
 }
 
 # Minimum at-home block duration in minutes
@@ -422,25 +423,25 @@ MIN_BLOCK_DURATION: int = 30
 MAX_BLOCKS_PER_DAY: int = 3
 
 
-def _time_str_to_minutes(time_str: str) -> int:
-    """Convert 'HH:MM:SS' or 'HH:MM' to minutes since midnight."""
-    parts = time_str.split(":")
-    return int(parts[0]) * 60 + int(parts[1])
+def _time_to_minutes(value: time) -> int:
+    """Convert a time to minutes since midnight (time.max = 24:00 = 1440)."""
+    if value == time.max:
+        return SCHEDULE_MINUTES_PER_DAY
+    return value.hour * 60 + value.minute
 
 
 def from_ha_schedule(
-    schedule_data: list[dict[str, Any]],
+    schedule_data: dict[str, list[dict[str, Any]]],
     at_home_temp: float,
     away_temp: float,
 ) -> WeeklySchedule:
     """Convert HA schedule helper data to a WeeklySchedule.
 
     Args:
-        schedule_data: List of schedule block dicts from the HA schedule
-            entity's schedule attribute. Each block has keys:
-            - "from": start time "HH:MM:SS"
-            - "to": end time "HH:MM:SS"
-            - "days": list of day abbreviations (e.g. ["mon", "tue"])
+        schedule_data: Response of the ``schedule.get_schedule`` service for
+            one entity: a dict keyed by day name ("monday", ...), each value
+            a list of blocks with "from"/"to" ``datetime.time`` values
+            (a block ending at 24:00 has ``time.max`` as "to").
         at_home_temp: Temperature for "at home" (on) periods.
         away_temp: Temperature for "away" (off) periods.
 
@@ -453,15 +454,12 @@ def from_ha_schedule(
     # Collect blocks per day
     day_blocks: dict[int, list[tuple[int, int]]] = {i: [] for i in range(7)}
 
-    for block in schedule_data:
-        from_min = _time_str_to_minutes(block["from"])
-        to_min = _time_str_to_minutes(block["to"])
-        days = block.get("days", [])
-
-        for day_abbr in days:
-            day_idx = _HA_DAY_TO_INDEX.get(day_abbr.lower())
-            if day_idx is not None:
-                day_blocks[day_idx].append((from_min, to_min))
+    for day_name, blocks in schedule_data.items():
+        day_idx = _HA_DAY_TO_INDEX[day_name]
+        for block in blocks:
+            day_blocks[day_idx].append(
+                (_time_to_minutes(block["from"]), _time_to_minutes(block["to"]))
+            )
 
     schedule = WeeklySchedule()
 
@@ -491,9 +489,11 @@ def from_ha_schedule(
                     temperature=at_home_temp,
                 )
             )
+            # A block ending at 24:00 switches to away at 23:59; the midnight
+            # crossing logic drops that event if the next day starts at 00:00.
             events.append(
                 ScheduleEvent(
-                    minutes_since_midnight=to_min,
+                    minutes_since_midnight=min(to_min, SCHEDULE_MINUTES_PER_DAY - 1),
                     temperature=away_temp,
                 )
             )

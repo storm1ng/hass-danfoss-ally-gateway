@@ -10,7 +10,14 @@ import logging
 from typing import Any
 
 from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
-from homeassistant.core import CALLBACK_TYPE, Event, EventStateChangedData, callback
+from homeassistant.core import (
+    CALLBACK_TYPE,
+    Event,
+    EventStateChangedData,
+    EventStateReportedData,
+    callback,
+)
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.event import async_call_later
 
 from ..backend import DanfossBackend
@@ -262,9 +269,13 @@ class ScheduleDelegate:
 
     @callback
     def handle_schedule_entity_change(
-        self, event: Event[EventStateChangedData]
+        self, event: Event[EventStateChangedData] | Event[EventStateReportedData]
     ) -> None:
-        """Handle schedule helper entity state change."""
+        """Handle schedule helper state change or config edit.
+
+        Editing the helper's blocks without changing its on/off state only
+        fires ``state_reported``, so both events are routed here.
+        """
         new_state = event.data.get("new_state")
         if new_state is None or new_state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
             return
@@ -284,8 +295,26 @@ class ScheduleDelegate:
             )
             return
 
-        schedule_blocks = state.attributes.get("schedule")
-        if not schedule_blocks:
+        # The blocks are not exposed as state attributes; read them via service.
+        try:
+            response = await self.hass.services.async_call(
+                "schedule",
+                "get_schedule",
+                {"entity_id": self._schedule_entity_id},
+                blocking=True,
+                return_response=True,
+            )
+        except HomeAssistantError as err:
+            _LOGGER.warning(
+                "Failed to read schedule from %s for room '%s': %s",
+                self._schedule_entity_id,
+                self._room_name,
+                err,
+            )
+            return
+
+        schedule_data = (response or {}).get(self._schedule_entity_id)
+        if not schedule_data:
             _LOGGER.debug(
                 "No schedule blocks in %s for room '%s'",
                 self._schedule_entity_id,
@@ -295,7 +324,7 @@ class ScheduleDelegate:
 
         try:
             schedule = from_ha_schedule(
-                schedule_blocks, self._at_home_temp, self._away_temp
+                schedule_data, self._at_home_temp, self._away_temp
             )
         except ValueError as err:
             _LOGGER.error(
@@ -309,6 +338,16 @@ class ScheduleDelegate:
         if schedule.is_empty:
             _LOGGER.debug(
                 "Empty schedule from %s for room '%s', skipping",
+                self._schedule_entity_id,
+                self._room_name,
+            )
+            return
+
+        # On/off toggles of the helper also trigger a sync; avoid rewriting
+        # the TRVs (battery, flash wear) when the blocks did not change.
+        if schedule == self._current_schedule:
+            _LOGGER.debug(
+                "Schedule from %s unchanged for room '%s', skipping",
                 self._schedule_entity_id,
                 self._room_name,
             )
@@ -403,6 +442,11 @@ class ScheduleDelegate:
                     trv_id, 0x02
                 )
             except Exception:  # noqa: BLE001
+                continue
+
+            # None means the backend cannot read the schedule back (Z2M);
+            # only a confirmed empty schedule indicates a power cycle.
+            if transitions is None:
                 continue
 
             if not transitions:

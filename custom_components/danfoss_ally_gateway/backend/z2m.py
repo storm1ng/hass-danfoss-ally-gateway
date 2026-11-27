@@ -39,6 +39,17 @@ from . import DanfossBackend, TRVState
 
 _LOGGER = logging.getLogger(__name__)
 
+# Z2M day names indexed by ZCL DayOfWeek bit (bit 0 = Sunday).
+_Z2M_DAY_NAMES = (
+    "sunday",
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+)
+
 # ── Z2M programming_operation_mode mapping ─────────────────────────────
 # Z2M expects string values for this attribute; the integration uses
 # raw ZCL integer values internally.  This maps the integration's
@@ -447,28 +458,29 @@ class Z2MBackend(DanfossBackend):
     ) -> None:
         """Send SetWeeklySchedule command via Z2M.
 
-        Z2M exposes the weekly_schedule attribute as a writable JSON object.
-        The format expected by Z2M for Danfoss devices is a JSON payload
-        with the schedule data sent through the set endpoint.
+        Z2M's thermostat_weekly_schedule converter expects ``dayofweek`` as
+        day names and ``heatSetpoint`` in °C (it scales by 100 itself). It
+        derives ``numoftrans`` and ``mode`` on its own, so they are not sent.
         """
-        # Z2M expects schedule as a JSON object with day/transitions
-        # Build the schedule payload in Z2M's expected format
+        days = [
+            name for bit, name in enumerate(_Z2M_DAY_NAMES) if day_of_week & (1 << bit)
+        ]
         schedule_payload = {
             "weekly_schedule": {
-                "dayofweek": day_of_week,
-                "numoftrans": num_transitions,
-                "mode": mode,
+                "dayofweek": days,
                 "transitions": [
-                    {"transitionTime": t[0], "heatSetpoint": t[1]} for t in transitions
+                    {"transitionTime": t[0], "heatSetpoint": t[1] / 100}
+                    for t in transitions
                 ],
             }
         }
         await self._async_set(trv_id, schedule_payload)
         _LOGGER.debug(
-            "Set weekly schedule for TRV %s (dow=0x%02X, %d transitions)",
+            "Set weekly schedule for TRV %s (dow=0x%02X, %d transitions, mode=0x%02X)",
             trv_id,
             day_of_week,
             num_transitions,
+            mode,
         )
 
     async def async_get_weekly_schedule(

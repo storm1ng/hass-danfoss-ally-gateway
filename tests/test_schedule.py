@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import time
+
 import pytest
 
 from custom_components.danfoss_ally_gateway.const import (
@@ -576,14 +578,15 @@ class TestSchedulesMatch:
 
 
 class TestFromHaSchedule:
-    """Tests for converting HA schedule helper data to WeeklySchedule."""
+    """Tests for converting HA schedule helper data to WeeklySchedule.
+
+    Input mirrors the ``schedule.get_schedule`` service response for one entity.
+    """
 
     def test_single_block_single_day(self):
         """One at-home block on Monday."""
-        blocks = [
-            {"from": "06:00:00", "to": "08:00:00", "days": ["mon"]},
-        ]
-        schedule = from_ha_schedule(blocks, at_home_temp=21.0, away_temp=17.0)
+        data = {"monday": [{"from": time(6, 0), "to": time(8, 0)}]}
+        schedule = from_ha_schedule(data, at_home_temp=21.0, away_temp=17.0)
 
         # Monday = day index 1
         assert len(schedule.days[1].events) == 2
@@ -596,11 +599,13 @@ class TestFromHaSchedule:
 
     def test_multiple_blocks_single_day(self):
         """Two at-home blocks on Monday."""
-        blocks = [
-            {"from": "06:00:00", "to": "08:00:00", "days": ["mon"]},
-            {"from": "16:00:00", "to": "22:00:00", "days": ["mon"]},
-        ]
-        schedule = from_ha_schedule(blocks, at_home_temp=21.0, away_temp=17.0)
+        data = {
+            "monday": [
+                {"from": time(6, 0), "to": time(8, 0)},
+                {"from": time(16, 0), "to": time(22, 0)},
+            ]
+        }
+        schedule = from_ha_schedule(data, at_home_temp=21.0, away_temp=17.0)
 
         assert len(schedule.days[1].events) == 4
         assert schedule.days[1].events[0] == ScheduleEvent(360, 21.0)
@@ -609,15 +614,18 @@ class TestFromHaSchedule:
         assert schedule.days[1].events[3] == ScheduleEvent(1320, 17.0)
 
     def test_block_across_multiple_days(self):
-        """One block applied to Mon-Fri."""
-        blocks = [
-            {
-                "from": "07:00:00",
-                "to": "09:00:00",
-                "days": ["mon", "tue", "wed", "thu", "fri"],
-            },
-        ]
-        schedule = from_ha_schedule(blocks, at_home_temp=22.0, away_temp=18.0)
+        """The same block on Mon-Fri, empty weekend days."""
+        block = [{"from": time(7, 0), "to": time(9, 0)}]
+        data = {
+            "monday": block,
+            "tuesday": block,
+            "wednesday": block,
+            "thursday": block,
+            "friday": block,
+            "saturday": [],
+            "sunday": [],
+        }
+        schedule = from_ha_schedule(data, at_home_temp=22.0, away_temp=18.0)
 
         for day_idx in [1, 2, 3, 4, 5]:  # Mon-Fri
             assert len(schedule.days[day_idx].events) == 2
@@ -630,35 +638,52 @@ class TestFromHaSchedule:
 
     def test_too_many_blocks_raises(self):
         """More than 3 blocks on a day should raise ValueError."""
-        blocks = [
-            {"from": "06:00:00", "to": "07:00:00", "days": ["mon"]},
-            {"from": "08:00:00", "to": "09:00:00", "days": ["mon"]},
-            {"from": "10:00:00", "to": "11:00:00", "days": ["mon"]},
-            {"from": "12:00:00", "to": "13:00:00", "days": ["mon"]},
-        ]
+        data = {
+            "monday": [
+                {"from": time(6, 0), "to": time(7, 0)},
+                {"from": time(8, 0), "to": time(9, 0)},
+                {"from": time(10, 0), "to": time(11, 0)},
+                {"from": time(12, 0), "to": time(13, 0)},
+            ]
+        }
         with pytest.raises(ValueError, match="exceeds maximum"):
-            from_ha_schedule(blocks, at_home_temp=21.0, away_temp=17.0)
+            from_ha_schedule(data, at_home_temp=21.0, away_temp=17.0)
 
     def test_block_too_short_raises(self):
         """Block shorter than 30 minutes should raise ValueError."""
-        blocks = [
-            {"from": "06:00:00", "to": "06:20:00", "days": ["mon"]},
-        ]
+        data = {"monday": [{"from": time(6, 0), "to": time(6, 20)}]}
         with pytest.raises(ValueError, match="minimum"):
-            from_ha_schedule(blocks, at_home_temp=21.0, away_temp=17.0)
+            from_ha_schedule(data, at_home_temp=21.0, away_temp=17.0)
 
     def test_empty_schedule(self):
         """No blocks should produce empty schedule."""
-        schedule = from_ha_schedule([], at_home_temp=21.0, away_temp=17.0)
+        schedule = from_ha_schedule({}, at_home_temp=21.0, away_temp=17.0)
         assert schedule.is_empty
 
-    def test_time_without_seconds(self):
-        """Time strings without seconds should work."""
-        blocks = [
-            {"from": "06:00", "to": "08:00", "days": ["sun"]},
+    def test_block_until_midnight(self):
+        """A block ending at 24:00 (time.max) switches to away at 23:59."""
+        data = {"sunday": [{"from": time(23, 30), "to": time.max}]}
+        schedule = from_ha_schedule(data, at_home_temp=21.0, away_temp=17.0)
+        assert schedule.days[0].events == [
+            ScheduleEvent(1410, 21.0),
+            ScheduleEvent(1439, 17.0),
         ]
-        schedule = from_ha_schedule(blocks, at_home_temp=21.0, away_temp=17.0)
-        assert len(schedule.days[0].events) == 2
+
+    def test_block_across_midnight(self):
+        """Mon 18-24 + Tue 00-06 stays at home over midnight and is valid."""
+        data = {
+            "monday": [{"from": time(18, 0), "to": time.max}],
+            "tuesday": [{"from": time(0, 0), "to": time(6, 0)}],
+        }
+        schedule = apply_midnight_crossing(
+            from_ha_schedule(data, at_home_temp=21.0, away_temp=17.0)
+        )
+        assert schedule.validate() == []
+        assert schedule.days[1].events == [ScheduleEvent(1080, 21.0)]
+        assert schedule.days[2].events == [
+            ScheduleEvent(0, 21.0),
+            ScheduleEvent(360, 17.0),
+        ]
 
 
 # ── WeeklySchedule.from_dict edge cases ───────────────────────────────

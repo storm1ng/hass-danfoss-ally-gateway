@@ -561,14 +561,29 @@ class TestZ2MSchedule:
         payload = json.loads(mock_mqtt.async_publish.call_args[0][2])
         assert "weekly_schedule" in payload
         ws = payload["weekly_schedule"]
-        assert ws["dayofweek"] == 0x02
-        assert ws["numoftrans"] == 2
-        assert ws["mode"] == 0x01
-        assert len(ws["transitions"]) == 2
-        assert ws["transitions"][0]["transitionTime"] == 0
-        assert ws["transitions"][0]["heatSetpoint"] == 2000
-        assert ws["transitions"][1]["transitionTime"] == 480
-        assert ws["transitions"][1]["heatSetpoint"] == 2200
+        assert ws == {
+            "dayofweek": ["monday"],
+            "transitions": [
+                {"transitionTime": 0, "heatSetpoint": 20.0},
+                {"transitionTime": 480, "heatSetpoint": 22.0},
+            ],
+        }
+
+    @patch("custom_components.danfoss_ally_gateway.backend.z2m.mqtt")
+    async def test_set_weekly_schedule_multiple_days(self, mock_mqtt, backend):
+        """Day-of-week bitmask is converted to a list of Z2M day names."""
+        mock_mqtt.async_publish = AsyncMock()
+        await backend.async_set_weekly_schedule(
+            "trv1",
+            day_of_week=0x41,  # Sunday + Saturday
+            num_transitions=1,
+            mode=0x01,
+            transitions=[(360, 2150)],
+        )
+        payload = json.loads(mock_mqtt.async_publish.call_args[0][2])
+        ws = payload["weekly_schedule"]
+        assert ws["dayofweek"] == ["sunday", "saturday"]
+        assert ws["transitions"] == [{"transitionTime": 360, "heatSetpoint": 21.5}]
 
     @patch("custom_components.danfoss_ally_gateway.backend.z2m.mqtt")
     async def test_get_weekly_schedule(self, mock_mqtt, backend):

@@ -2,15 +2,24 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from unittest.mock import MagicMock
 
 import pytest
 from conftest import make_subentry_data, make_trv_state
-from homeassistant.const import STATE_ON, STATE_UNAVAILABLE
+from homeassistant.components.schedule.const import DATA_SCHEDULE
+from homeassistant.const import EVENT_STATE_CHANGED, STATE_ON, STATE_UNAVAILABLE
+from homeassistant.setup import async_setup_component
+from homeassistant.util import dt as dt_util
+from pytest_homeassistant.common import async_capture_events
 
 from custom_components.danfoss_ally_gateway.const import (
     CONF_TRV_ENTITIES,
+    DEFAULT_AT_HOME_TEMP,
+    DEFAULT_AWAY_TEMP,
     LOAD_BALANCE_DISABLED_VALUE,
+    SCHEDULE_DOW_MONDAY,
+    SCHEDULE_DOW_TUESDAY,
     SCHEDULE_MODE_MANUAL,
     SCHEDULE_MODE_SCHEDULE,
     SCHEDULE_MODE_SCHEDULE_PREHEAT,
@@ -479,6 +488,119 @@ class TestSetpointCoordination:
         await coord.async_teardown()
 
 
+# ── Schedule helper sync ──────────────────────────────────────────────
+
+SCHEDULE_HELPER = "schedule.heating"
+
+
+@pytest.fixture
+async def schedule_helper(hass, freezer):
+    """Set up a real schedule helper: Mon + Tue 06-08 at home.
+
+    Time is frozen on a Monday at noon, so the helper is off and its
+    next_event is Tuesday 06:00.
+    """
+    freezer.move_to(
+        datetime(2026, 11, 23, 12, 0, tzinfo=dt_util.get_default_time_zone())
+    )
+    assert await async_setup_component(
+        hass,
+        "schedule",
+        {
+            "schedule": {
+                "heating": {
+                    "name": "Heating",
+                    "monday": [{"from": "06:00", "to": "08:00"}],
+                    "tuesday": [{"from": "06:00", "to": "08:00"}],
+                }
+            }
+        },
+    )
+    await hass.async_block_till_done()
+    entity = hass.data[DATA_SCHEDULE].component.get_entity(SCHEDULE_HELPER)
+    yield entity
+    await entity.async_remove()  # cancels the helper's update timer
+
+
+class TestScheduleHelperSync:
+    """Tests for syncing the HA schedule helper to the TRVs."""
+
+    async def test_setup_programs_schedule_and_mode(
+        self, hass, mock_backend, schedule_helper
+    ):
+        data = make_subentry_data(schedule_entity=SCHEDULE_HELPER)
+        coord = RoomCoordinator(hass, mock_backend, data)
+        await coord.async_setup()
+
+        assert coord._current_schedule.days[1].events == [
+            ScheduleEvent(360, DEFAULT_AT_HOME_TEMP),
+            ScheduleEvent(480, DEFAULT_AWAY_TEMP),
+        ]
+        calls = mock_backend.async_set_weekly_schedule.call_args_list
+        assert {c.args[0] for c in calls} == {"trv_1", "trv_2"}
+        assert {c.kwargs["day_of_week"] for c in calls} == {
+            SCHEDULE_DOW_MONDAY,
+            SCHEDULE_DOW_TUESDAY,
+        }
+        assert coord._schedule._mode == SCHEDULE_MODE_SCHEDULE_PREHEAT
+        assert mock_backend.async_set_programming_mode.called
+        await coord.async_teardown()
+
+    async def test_unchanged_schedule_is_not_reprogrammed(
+        self, hass, mock_backend, schedule_helper
+    ):
+        """An on/off toggle re-syncs, but the TRVs are not written again."""
+        coord = RoomCoordinator(
+            hass, mock_backend, make_subentry_data(schedule_entity=SCHEDULE_HELPER)
+        )
+        await coord.async_setup()
+        mock_backend.async_clear_weekly_schedule.reset_mock()
+        mock_backend.async_set_weekly_schedule.reset_mock()
+
+        await coord._schedule.async_sync_from_entity()
+
+        mock_backend.async_clear_weekly_schedule.assert_not_called()
+        mock_backend.async_set_weekly_schedule.assert_not_called()
+        await coord.async_teardown()
+
+    async def test_edit_without_state_change_reprograms(
+        self, hass, mock_backend, schedule_helper
+    ):
+        """Editing blocks only fires state_reported; it must still sync."""
+        coord = RoomCoordinator(
+            hass, mock_backend, make_subentry_data(schedule_entity=SCHEDULE_HELPER)
+        )
+        await coord.async_setup()
+        mock_backend.async_set_weekly_schedule.reset_mock()
+        state_changed = async_capture_events(hass, EVENT_STATE_CHANGED)
+
+        # Add a Wednesday block: state (off) and next_event stay the same
+        await schedule_helper.async_update_config(
+            {
+                "id": "heating",
+                "name": "Heating",
+                "monday": [{"from": "06:00", "to": "08:00"}],
+                "tuesday": [{"from": "06:00", "to": "08:00"}],
+                "wednesday": [{"from": "18:00", "to": "22:00"}],
+            }
+        )
+        await hass.async_block_till_done()
+
+        assert state_changed == []
+        assert coord._current_schedule.days[3].events[0].minutes_since_midnight == 1080
+        assert mock_backend.async_set_weekly_schedule.called
+        await coord.async_teardown()
+
+    async def test_missing_entity_programs_nothing(self, hass, mock_backend):
+        coord = RoomCoordinator(
+            hass, mock_backend, make_subentry_data(schedule_entity=SCHEDULE_HELPER)
+        )
+        await coord.async_setup()
+        mock_backend.async_set_weekly_schedule.assert_not_called()
+        assert coord._current_schedule is None
+        await coord.async_teardown()
+
+
 # ── Power Cycle Detection ─────────────────────────────────────────────
 
 
@@ -545,13 +667,36 @@ class TestPowerCycleDetection:
 
         # No E10, but schedule is empty on TRV
         mock_backend.async_read_sw_error_code.return_value = "ok"
-        mock_backend.async_get_weekly_schedule.return_value = None
+        mock_backend.async_get_weekly_schedule.return_value = []
 
         await coord._async_check_power_cycle()
 
         # Should re-program for each TRV
         assert mock_backend.async_clear_weekly_schedule.call_count == 2
         assert mock_backend.async_set_weekly_schedule.call_count >= 2
+        await coord.async_teardown()
+
+    async def test_power_cycle_unreadable_schedule_no_recovery(
+        self, hass, mock_backend, subentry_data
+    ):
+        """Unreadable schedule (None, e.g. Z2M) without E10 is not a power cycle."""
+        coord = RoomCoordinator(hass, mock_backend, subentry_data)
+        await coord.async_setup()
+
+        ws = WeeklySchedule()
+        ws.days[1] = DaySchedule(events=[ScheduleEvent(360, 21.0)])
+        await coord.async_program_schedule(ws)
+
+        mock_backend.async_clear_weekly_schedule.reset_mock()
+        mock_backend.async_set_weekly_schedule.reset_mock()
+
+        mock_backend.async_read_sw_error_code.return_value = "ok"
+        mock_backend.async_get_weekly_schedule.return_value = None
+
+        await coord._async_check_power_cycle()
+
+        mock_backend.async_clear_weekly_schedule.assert_not_called()
+        mock_backend.async_set_weekly_schedule.assert_not_called()
         await coord.async_teardown()
 
     async def test_no_power_cycle_schedule_present(

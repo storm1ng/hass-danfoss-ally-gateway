@@ -32,6 +32,7 @@ from homeassistant.core import (
 from homeassistant.helpers.event import (
     async_call_later,
     async_track_state_change_event,
+    async_track_state_report_event,
 )
 
 from ..backend import DanfossBackend, TRVState
@@ -243,6 +244,13 @@ class RoomCoordinator:
         # Schedule helper entity
         if self._schedule._schedule_entity_id:
             unsub = async_track_state_change_event(
+                self.hass,
+                [self._schedule._schedule_entity_id],
+                self._schedule.handle_schedule_entity_change,
+            )
+            self._unsub_callbacks.append(unsub)
+            # Block edits without an on/off change only fire state_reported
+            unsub = async_track_state_report_event(
                 self.hass,
                 [self._schedule._schedule_entity_id],
                 self._schedule.handle_schedule_entity_change,
